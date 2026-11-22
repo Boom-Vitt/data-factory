@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# conversation data never belongs in this repo
+train.jsonl
+sessions/
+.data-factory/
