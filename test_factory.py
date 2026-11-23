@@ -1,6 +1,6 @@
 """Run: python test_factory.py  (uses a temp store and a fake home; touches nothing real).
 Runs in CI on Linux, macOS and Windows."""
-import json, os, subprocess, sys, tempfile, zipfile
+import base64, json, os, subprocess, sys, tempfile, zipfile
 from pathlib import Path
 
 tmp = Path(tempfile.mkdtemp())
@@ -9,6 +9,7 @@ os.environ["DATA_FACTORY_NO_OPEN"] = "1"  # never pop a browser from the test
 import factory as f
 
 KEY = "sk-" + "a" * 30
+PNG, JPG, SHOT = (base64.b64encode(b).decode() for b in (b"pasted png", b"pasted jpg", b"tool screenshot"))
 
 
 def write(path, rows):
@@ -36,6 +37,20 @@ write(home / ".gemini/tmp/x/chats/g1.jsonl", [
     {"sessionId": "g"}, {"type": "user", "content": [{"text": "gq"}]}, {"type": "gemini", "content": "ga"}])
 write(home / ".gemini/antigravity/brain/B1/.system_generated/logs/transcript_full.jsonl", [
     {"source": "SYSTEM", "content": "sys"}, {"source": "USER_EXPLICIT", "content": "aq"}, {"source": "MODEL", "content": "aa"}])
+# pasted images: stored once by content, even when pasted twice; what a tool read is not stored
+image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG}}
+write(home / ".claude/projects/p/s2.jsonl", [
+    {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "look at this"}, image]}},
+    {"type": "user", "message": {"role": "user", "content": [image]}},
+    {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": SHOT}}]}]}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "not base64 !!"}}]}},
+])
+write(home / ".codex/sessions/2026/01/01/r2.jsonl", [
+    {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+        {"type": "input_text", "text": "see"}, {"type": "input_image", "image_url": f"data:image/jpeg;base64,{JPG}"}]}},
+])
 
 f.collect(home)
 
@@ -52,10 +67,24 @@ assert [(r["role"], r["text"], r["cwd"]) for r in x] == [("user", "q", "/c"), ("
 assert [r["text"] for r in read("gemini/g1.jsonl")] == ["gq", "ga"]
 assert [r["text"] for r in read("antigravity/B1.jsonl")] == ["aq", "aa"]
 
+s2 = read("claude-code/s2.jsonl")
+assert [r["text"] for r in s2] == ["look at this", ""] and s2[0]["media"] == s2[1]["media"], s2
+stored = sorted(p.name[-4:] for p in f.MEDIA.glob("*/*"))
+assert stored == [".jpg", ".png"], stored
+assert (f.MEDIA / s2[0]["media"][0]).read_bytes() == b"pasted png"
+assert read("codex/r2.jsonl")[0]["media"][0].endswith(".jpg") and "media" not in c[0]
+
 # unchanged sources are skipped on the next run
 before = (f.SESSIONS / "codex/r1.jsonl").stat().st_mtime_ns
 f.collect(home)
 assert (f.SESSIONS / "codex/r1.jsonl").stat().st_mtime_ns == before
+
+# a store written by an older version is re-read once, even though nothing looks changed
+(f.STORE / "version").unlink()
+(f.SESSIONS / "codex/r1.jsonl").write_text("", encoding="utf-8")
+os.utime(f.SESSIONS / "codex/r1.jsonl", ns=(before, before))
+f.collect(home)
+assert len(read("codex/r1.jsonl")) == 2 and (f.STORE / "version").read_text(encoding="utf-8") == f.VERSION
 
 # web exports: ChatGPT (zip) and Claude.ai (json)
 z = tmp / "chatgpt.zip"
@@ -117,8 +146,8 @@ assert page.count('class="rider"') == 3 * 7 + 3, "three crates per agent belt pl
 LONG = "please explain in detail how the conveyor belt scheduler decides which crate goes first"
 
 
-def turn(prompt, cwd=None):
-    return [("user", prompt, None, None, cwd), ("assistant", "an answer", None, None, cwd)]
+def turn(prompt, cwd=None, media=()):
+    return [("user", prompt, None, None, cwd, list(media)), ("assistant", "an answer", None, None, cwd)]
 
 
 f.save("codex", "typed", turn(LONG) + turn("done?")
@@ -134,10 +163,15 @@ assert [x["kind"] for x in briefs] == ["brief"] and briefs[0]["source"] == "clau
 
 # exclude: removes what is stored from that folder, blocks re-collection, leaves a sibling folder alone
 app, sibling = tmp / "work" / "app", tmp / "work" / "app2"
-f.save("codex", "inside", turn("q", str(app / "sub")))
+secret_pic, shared_pic = (("image/png", base64.b64encode(b).decode()) for b in (b"client diagram", b"pasted png"))
+f.save("codex", "inside", turn("q", str(app / "sub"), [secret_pic, shared_pic]))
 f.save("codex", "sibling", turn("q", str(sibling)))
+assert len(list(f.MEDIA.glob("*/*"))) == 3
 f.exclude(str(app))
 assert not (f.SESSIONS / "codex/inside.jsonl").exists() and (f.SESSIONS / "codex/sibling.jsonl").exists()
+left = sorted(p.read_bytes() for p in f.MEDIA.glob("*/*"))
+assert left == [b"pasted jpg", b"pasted png"], "its own image is deleted; one another conversation still uses is kept"
+assert f.save("codex", "inside", turn("q", str(app / "sub"), [secret_pic])) == 0 and len(list(f.MEDIA.glob("*/*"))) == 2
 assert f.save("codex", "inside", turn("q", str(app / "sub"))) == 0 and not (f.SESSIONS / "codex/inside.jsonl").exists()
 assert f.save("codex", "inside", turn("q", str(app.resolve() / "x"))) == 0, "the resolved form of the folder is excluded too"
 assert f.save("codex", "nofolder", turn("q")) == 2, "records without a folder are never excluded"

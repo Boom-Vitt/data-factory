@@ -13,12 +13,14 @@
 
 Store: ~/.data-factory (override with DATA_FACTORY_HOME). Stdlib only, Python 3.9+.
 """
-import argparse, hashlib, html, json, math, os, re, shutil, subprocess, sys, webbrowser, zipfile
+import argparse, base64, hashlib, html, json, math, os, re, shutil, subprocess, sys, webbrowser, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 STORE = Path(os.environ.get("DATA_FACTORY_HOME") or Path.home() / ".data-factory")
 SESSIONS = STORE / "sessions"
+MEDIA = STORE / "media"
+VERSION = "2"  # bump when stored records gain something: the next collect then re-reads every transcript still on disk
 
 # ponytail: catches common key shapes only, not every secret. Run a real scanner
 # (gitleaks/trufflehog) over the store before it ever leaves this machine.
@@ -65,13 +67,30 @@ def lines(path):
                 yield d
 
 
-# --- parsers: each yields (role, text, timestamp, model, cwd) -----------------
+def media_of(content):
+    """(media type, base64 data) for each image or file pasted into a message. Whatever an agent read
+    through a tool is not included: that is tool output, and it runs to gigabytes."""
+    found = []
+    for b in content if isinstance(content, list) else []:
+        if not isinstance(b, dict):
+            continue
+        src = b.get("source")
+        if b.get("type") in ("image", "document") and isinstance(src, dict) and src.get("type") == "base64":
+            found.append((src.get("media_type"), src.get("data")))  # Claude
+        elif b.get("type") == "input_image" and str(b.get("image_url", "")).startswith("data:"):
+            head, _, data = b["image_url"].partition(",")  # Codex: data:image/png;base64,....
+            found.append((head[5:].split(";")[0], data))
+    return found
+
+
+# --- parsers: each yields (role, text, timestamp, model, cwd[, pasted media]) --
 
 def claude(path):
     for d in lines(path):
         m = d.get("message")
         if d.get("type") in ("user", "assistant") and isinstance(m, dict) and not d.get("isMeta"):
-            yield m.get("role"), text_of(m.get("content")), d.get("timestamp"), m.get("model"), d.get("cwd")
+            yield (m.get("role"), text_of(m.get("content")), d.get("timestamp"), m.get("model"), d.get("cwd"),
+                   media_of(m.get("content")))
 
 
 def codex(path):
@@ -81,7 +100,7 @@ def codex(path):
         cwd = p["cwd"] if isinstance(p.get("cwd"), str) else cwd
         model = p["model"] if isinstance(p.get("model"), str) else model
         if d.get("type") == "response_item" and p.get("type") == "message":
-            yield p.get("role"), text_of(p.get("content")), d.get("timestamp"), model, cwd
+            yield p.get("role"), text_of(p.get("content")), d.get("timestamp"), model, cwd, media_of(p.get("content"))
 
 
 def gemini(path):
@@ -144,27 +163,72 @@ def exclude(folder=None, remove=False):
                 if any(is_excluded(r.get("cwd"), folders) for r in lines(p)):
                     p.unlink()
                     gone += 1
-            print(f"removed {gone:,} stored conversations from {typed}; it will not be collected again")
+            print(f"removed {gone:,} stored conversations and {gc_media():,} of their images and files "
+                  f"from {typed}; it will not be collected again")
             profile()
             export()
             dashboard()
     print("excluded folders:" + "".join(f"\n  {f}" for f in folders) if folders else "no folders are excluded")
 
 
+EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "application/pdf": "pdf"}
+
+
+def store_media(media_type, data):
+    """Save one pasted image or file under media/, named by its content hash. Returns its path there, or None."""
+    try:
+        raw = base64.b64decode(data)
+    except (ValueError, TypeError):
+        return None
+    if not raw or len(raw) > 25_000_000:  # nothing, or too big to be a pasted attachment
+        return None
+    name = hashlib.sha256(raw).hexdigest()
+    rel = f"{name[:2]}/{name}.{EXT.get(media_type, 'bin')}"
+    out = MEDIA / rel
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_suffix(".tmp")
+        tmp.write_bytes(raw)
+        os.replace(tmp, out)
+    return rel
+
+
+def gc_media():
+    """Delete stored images and files that no remaining conversation refers to. Returns how many."""
+    used = {m for p in SESSIONS.glob("*/*.jsonl") for r in lines(p) for m in r.get("media") or []}
+    gone = 0
+    for f in MEDIA.glob("*/*"):
+        if f"{f.parent.name}/{f.name}" not in used:
+            f.unlink()
+            gone += 1
+    return gone
+
+
 def save(source, session, msgs):
     """Write one session file (atomically). Returns the number of messages kept."""
-    recs = [
-        {"source": source, "session": session, "role": role, "text": redact(text),
-         "ts": ts, "model": model, "cwd": cwd}
-        for role, text, ts, model, cwd in msgs
-        if role in ("user", "assistant") and isinstance(text, str) and text.strip()
-        and not (role == "user" and HARNESS.match(text))
-    ]
+    recs, pasted = [], []
+    for role, text, ts, model, cwd, *more in msgs:
+        media = more[0] if more else []
+        if role not in ("user", "assistant") or not isinstance(text, str):
+            continue
+        if not (text.strip() or media) or (role == "user" and HARNESS.match(text)):
+            continue
+        recs.append({"source": source, "session": session, "role": role, "text": redact(text),
+                     "ts": ts, "model": model, "cwd": cwd})
+        if media:
+            pasted.append((recs[-1], media))
     out = SESSIONS / clean_name(source) / f"{clean_name(session)}.jsonl"
     folders = excluded()
     if any(is_excluded(r["cwd"], folders) for r in recs):
         out.unlink(missing_ok=True)
         return 0
+    # ponytail: a session's pasted media is held in memory until here, so nothing from an excluded
+    # folder ever touches the disk. Stream to a temp dir if a single session ever outgrows RAM.
+    for rec, media in pasted:
+        kept = [rel for rel in (store_media(kind_, data) for kind_, data in media) if rel]
+        if kept:
+            rec["media"] = kept
+    recs = [r for r in recs if r["text"].strip() or r.get("media")]
     if recs:
         out.parent.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(".tmp")
@@ -175,6 +239,12 @@ def save(source, session, msgs):
 
 def collect(home=None):
     home = Path(home or Path.home())
+    try:
+        current = (STORE / "version").read_text(encoding="utf-8").strip() == VERSION
+    except OSError:
+        current = False
+    if not current and SESSIONS.exists():
+        print("store was written by an older version: re-reading every transcript still on disk")
     for source, (pattern, parser, sid) in SOURCES.items():
         seen = updated = msgs = 0
         for src in home.glob(pattern):
@@ -182,7 +252,7 @@ def collect(home=None):
             out = SESSIONS / source / f"{clean_name(sid(src))}.jsonl"
             try:
                 mtime = src.stat().st_mtime_ns
-                if out.exists() and out.stat().st_mtime_ns >= mtime:
+                if current and out.exists() and out.stat().st_mtime_ns >= mtime:
                     continue
                 n = save(source, sid(src), parser(src))
                 if n:  # keep the transcript's own time: "latest sessions" then means last activity
@@ -193,6 +263,8 @@ def collect(home=None):
             updated += bool(n)
             msgs += n
         print(f"{source:12} {seen:6} sessions found, {updated:6} updated, {msgs:8} messages written")
+    STORE.mkdir(parents=True, exist_ok=True)
+    (STORE / "version").write_text(VERSION, encoding="utf-8")
     profile()
     export()
     dashboard()
@@ -654,6 +726,7 @@ def dashboard():
         counts = json.loads((STORE / "profile.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         counts = profile()
+    media_n = sum(1 for _ in MEDIA.glob("*/*"))
     floor, gw, gd = scene(agents, total, pairs_n)
     fill = {
         "__NOW__": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -661,7 +734,8 @@ def dashboard():
         "__NSOURCES__": f"{len(per)} AI agent" + "s" * (len(per) != 1), "__STORE__": e(str(STORE)),
         "__SCENE__": floor, "__GW__": str(gw), "__GD__": str(gd),
         "__SH__": f"{(gw + gd) * .36 + 140:.0f}", "__FIT__": f"{(gw + gd) * .72:.0f}",
-        "__OCRLINE__": f" It also indexes {counts['ocr_pairs']:,} images with their correct text for OCR training." if counts.get("ocr_pairs") else "",
+        "__OCRLINE__": (f" It also indexes {counts['ocr_pairs']:,} images with their correct text for OCR training." if counts.get("ocr_pairs") else "")
+        + (f" {media_n:,} images and files you pasted into chats are kept too." if media_n else ""),
         "__RECS__": recommendations(counts, total), "__MORE__": more_sources(per),
         "__SOURCES__": sources or '<tr><td colspan="4">Nothing collected yet. Run: factory.py collect</td></tr>',
         "__RECENT__": recent or '<tr><td colspan="3">No conversations yet.</td></tr>',
