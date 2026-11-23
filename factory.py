@@ -145,6 +145,7 @@ def collect(home=None):
             updated += bool(n)
             msgs += n
         print(f"{source:12} {seen:6} sessions found, {updated:6} updated, {msgs:8} messages written")
+    profile()
     dashboard()
 
 
@@ -249,19 +250,19 @@ def log(source, prompt, response, model=None):
 # --- the factory page ---------------------------------------------------------
 
 PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="60">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="120">
 <title>data-factory</title><style>
-:root{--bg:#e6e9eb;--ink:#14171a;--dim:#5b6570;--line:#c3c9ce;--floor:#d3d8dc;--joint:#bcc3c9;--wall:#aeb6bd;
---belt:#2a2e32;--hazard:#f2c200;--glow:#fff6c9;--tag:#ffffff;--rz:40deg;--rx:58deg;--s:1}
-@media(prefers-color-scheme:dark){:root{--bg:#14171a;--ink:#e8ecef;--dim:#93a0ab;--line:#2c3339;--floor:#1f2428;
---joint:#2b3238;--wall:#59636c;--belt:#0b0d0e;--hazard:#f2c200;--glow:#ffd96a;--tag:#262c31}}
+:root{--bg:#e6e9eb;--ink:#14171a;--dim:#56606a;--line:#c3c9ce;--floor:#d3d8dc;--joint:#bcc3c9;--wall:#aeb6bd;
+--belt:#2a2e32;--hazard:#f2c200;--glow:#fff6c9;--tag:#ffffff;--ok:#2f7d6b;--bad:#a63f2b;--rz:40deg;--rx:58deg;--s:1}
+@media(prefers-color-scheme:dark){:root{--bg:#14171a;--ink:#e8ecef;--dim:#9aa6b0;--line:#2c3339;--floor:#1f2428;
+--joint:#2b3238;--wall:#59636c;--belt:#0b0d0e;--glow:#ffd96a;--tag:#262c31;--ok:#3d9c86;--bad:#c9573f}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Sukhumvit Set",Thonburi,sans-serif}
-main{max-width:1040px;margin:0 auto;padding:28px 16px 48px}
-h1,h2,.tag b,.n{font-family:"Avenir Next Condensed","DIN Condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Sukhumvit Set",Thonburi,sans-serif}
+main{max-width:1040px;margin:0 auto;padding:28px 16px 56px}
+h1,h2,h3,.tag b,.n,.chip{font-family:"Avenir Next Condensed","DIN Condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif}
 h1{font-size:44px;line-height:1;margin:0;font-weight:700;letter-spacing:.01em}
-.sub{margin:8px 0 0;max-width:70ch}.sub span{color:var(--dim)}
-h2{font-size:22px;font-weight:600;margin:36px 0 6px}
+.sub{margin:10px 0 0;max-width:68ch;font-size:18px}.note,.lead{color:var(--dim);margin:4px 0 0;max-width:70ch;font-size:15px}
+h2{font-size:26px;font-weight:600;margin:44px 0 0}.lead{margin-bottom:12px}
 .stage{position:relative;height:calc(__SH__px*var(--s));margin:18px 0 0;overflow:hidden;background:var(--floor);
 border-top:6px solid var(--hazard);perspective:1800px;cursor:grab;touch-action:pan-y;user-select:none;-webkit-user-select:none}
 .stage:active{cursor:grabbing}
@@ -294,21 +295,41 @@ border-left:4px solid var(--c,var(--hazard));box-shadow:0 1px 0 rgba(0,0,0,.25)}
 @keyframes puff{0%{opacity:0;transform:translateZ(var(--z)) rotateZ(calc(-1*var(--rz))) rotateX(calc(-1*var(--rx))) scale(.5)}
 15%{opacity:.45}100%{opacity:0;transform:translateZ(calc(var(--z) + 120px)) rotateZ(calc(-1*var(--rz))) rotateX(calc(-1*var(--rx))) scale(2)}}
 @media(prefers-reduced-motion:reduce){.rider,.puff{animation:none}}
-.hint{color:var(--dim);font-size:13px;margin:6px 0 0}
+.ctl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0 0}
+.ctl span{color:var(--dim);font-size:15px;margin-right:auto;max-width:60ch}
+button{font:inherit;font-size:15px;color:var(--ink);background:var(--tag);border:1px solid var(--line);padding:6px 14px;cursor:pointer}
+button:hover{border-color:var(--ink)}button:focus-visible{outline:3px solid var(--hazard);outline-offset:2px}
+.recs{list-style:none;margin:0;padding:0}
+.rec{position:relative;display:grid;grid-template-columns:1fr 300px;gap:6px 36px;padding:16px 0 16px 20px;border-top:1px solid var(--line)}
+.rec::before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:6px;background:var(--k)}
+.s-ready{--k:var(--ok)}.s-prep,.s-more{--k:var(--hazard)}.s-missing{--k:var(--bad)}.s-no{--k:var(--dim)}
+.rec h3{margin:0;font-size:21px;font-weight:600}.rec p{margin:4px 0 0}.rec .next{color:var(--dim);font-size:15px}
+.chip{display:inline-block;font-size:15px;font-weight:600;padding:1px 9px 2px;background:var(--k);color:#fff}
+.s-prep .chip,.s-more .chip{color:#14171a}.s-no .chip{color:var(--bg)}
+.meter{height:8px;background:var(--line);margin:10px 0 4px}.meter i{display:block;height:100%;background:var(--k)}
+.rec .cnt,.rec .model{font-size:14px;margin:2px 0 0}.rec .model{color:var(--dim)}
+.more{margin:0;padding-left:20px;max-width:75ch}.more li{margin:6px 0}
+code{font:13px ui-monospace,Menlo,Consolas,monospace;background:var(--tag);padding:2px 6px;overflow-wrap:anywhere}
 .box{overflow-x:auto}table{border-collapse:collapse;width:100%}
 td,th{padding:8px 14px 8px 0;text-align:left;border-top:1px solid var(--line);vertical-align:top}
-th{font-size:13px;color:var(--dim);font-weight:500;border-top:2px solid var(--ink)}
-.n{text-align:right;font-size:18px;white-space:nowrap}.t,.a{white-space:nowrap}.t{color:var(--dim);font-variant-numeric:tabular-nums}
+th{font-size:14px;color:var(--dim);font-weight:500;border-top:2px solid var(--ink)}
+.n{text-align:right;font-size:19px;white-space:nowrap}.t,.a{white-space:nowrap}.t{color:var(--dim)}
 .a i{display:inline-block;width:10px;height:10px;margin-right:8px;background:var(--c)}
-.bar{width:38%;min-width:90px}.bar i{display:block;height:10px;margin-top:8px;background:var(--c)}
-.q{overflow-wrap:anywhere}footer{color:var(--dim);font-size:13px;margin-top:28px}
+.bar{width:38%;min-width:90px}.bar i{display:block;height:10px;margin-top:9px;background:var(--c)}
+.q{overflow-wrap:anywhere}footer{color:var(--dim);font-size:14px;margin-top:36px}
+@media(max-width:720px){.rec{grid-template-columns:1fr}h1{font-size:36px}}
 </style><main><h1>data-factory</h1>
-<p class="sub">__SESSIONS__ sessions, __MESSAGES__ messages and __PAIRS__ training pairs from __NSOURCES__ on this machine.
-<span>Updated __NOW__. This page is a local file; nothing is uploaded.</span></p>
-<div class="stage" role="img" aria-label="3D factory floor: each agent is a machine sending crates of conversations into the factory, which ships training pairs. The same numbers are in the tables below."><div class="world"><div class="ground"></div>__SCENE__</div></div>
-<p class="hint">Drag the floor to turn it. Taller machines hold more messages; faster belts are busier agents.</p>
-<h2>What each agent sent in</h2><div class="box"><table><tr><th>Agent</th><th class="n">Sessions</th><th class="n">Messages</th><th></th></tr>__SOURCES__</table></div>
-<h2>Latest sessions</h2><div class="box"><table><tr><th>Last activity</th><th>Agent</th><th>First prompt</th></tr>__RECENT__</table></div>
+<p class="sub">Your factory holds __SESSIONS__ conversations (__MESSAGES__ messages) from __NSOURCES__, and has packed __PAIRS__ question-and-answer pairs for training.</p>
+<p class="note">Updated __NOW__. Everything on this page stays on your computer.</p>
+<div class="stage" role="img" aria-label="3D factory floor: each AI agent is a machine sending crates of conversations into the factory, which ships training pairs. The same numbers are in the tables below."><div class="world"><div class="ground"></div>__SCENE__</div></div>
+<div class="ctl"><span>Each machine is one AI agent: taller means more messages, a faster belt means a busier agent. Drag the floor to look around.</span>
+<button type="button" data-d="-30">Turn left</button><button type="button" data-d="30">Turn right</button><button type="button" data-d="0">Reset view</button></div>
+<h2>What you can train with this data</h2>
+<p class="lead">Counted from your own conversations. The bar shows how many examples you have against a sensible minimum. Fine-tuning needs a GPU; searching and testing do not.</p>
+<ul class="recs">__RECS__</ul>
+<h2>Add more conversations</h2><p class="lead">More agents in the factory means better answers above.</p><ul class="more">__MORE__</ul>
+<h2>What each agent sent in</h2><div class="box"><table><tr><th>Agent</th><th class="n">Conversations</th><th class="n">Messages</th><th></th></tr>__SOURCES__</table></div>
+<h2>Latest conversations</h2><div class="box"><table><tr><th>Last activity</th><th>Agent</th><th>It started with</th></tr>__RECENT__</table></div>
 <footer>Stored in __STORE__</footer></main>
 <script>
 const st=document.querySelector('.stage'),R=document.documentElement.style;let rz=40,rx=58;
@@ -318,10 +339,20 @@ const fit=()=>R.setProperty('--s',Math.min(1,st.clientWidth/__FIT__));
 st.onpointerdown=e=>{st.setPointerCapture(e.pointerId);let x=e.clientX,y=e.clientY;
 st.onpointermove=m=>{rz-=(m.clientX-x)*.4;rx=Math.max(30,Math.min(80,rx-(m.clientY-y)*.3));x=m.clientX;y=m.clientY;set()}};
 st.onpointerup=st.onpointercancel=()=>st.onpointermove=null;addEventListener('resize',fit);fit();set();
+document.querySelectorAll('.ctl button').forEach(b=>b.onclick=()=>{+b.dataset.d?rz+=+b.dataset.d:(rz=40,rx=58);set()});
+const ago=new Intl.RelativeTimeFormat('en',{numeric:'auto'});
+document.querySelectorAll('[data-t]').forEach(e=>{const s=e.dataset.t-Date.now()/1000,a=Math.abs(s);
+const [n,u]=a<3600?[s/60,'minute']:a<86400?[s/3600,'hour']:[s/86400,'day'];e.title=e.textContent;e.textContent=ago.format(Math.round(n),u)});
 </script></html>"""
 
 PAINTS = ["#2f7d6b", "#2b5fa8", "#a63f2b", "#6a5a9c", "#b07a1e", "#1f7f8c", "#8a3f6b", "#55626e"]  # machine enamel
 CRATE = "#c9a063"
+NAMES = {"claude-code": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "antigravity": "Antigravity",
+         "chatgpt": "ChatGPT", "claude-chat": "Claude chat", "grok": "Grok", "cowork": "Cowork"}
+
+
+def nice(source):
+    return NAMES.get(source, source)
 
 
 def cube(x, y, w, d, h, c, z=0, cls=""):
@@ -358,7 +389,7 @@ def scene(agents, total, pairs_n):
         parts += [cube(40, y + (slot - mw) / 2, mw, mw, h, c),
                   cube(40 + mw, y + slot / 2 - 9, fx - 40 - mw, 18, 8, "var(--belt)"),
                   riders(40 + mw / 2, y + slot / 2 - 6, fx - 20 - mw / 2, seconds, c),
-                  tag(40 + mw / 2, y + slot / 2, h + 10, name, f"{m:,} messages", c)]
+                  tag(40 + mw / 2, y + slot / 2, h + 10, nice(name), f"{m:,} messages", c)]
     parts += [
         cube(fx, 40, fw, depth, fh, "var(--wall)", cls="fac"),
         cube(fx - 8, 32, fw + 16, depth + 16, 8, "var(--hazard)", z=fh),            # roof
@@ -373,9 +404,104 @@ def scene(agents, total, pairs_n):
         f'<div class="zone" style="left:{fx + fw + 108}px;top:{cy - 52:.0f}px;width:104px;height:104px"></div>',
         cube(fx + fw + 122, cy - 38, 34, 34, 28, CRATE), cube(fx + fw + 122, cy + 4, 34, 34, 28, CRATE),
         cube(fx + fw + 162, cy - 18, 34, 34, 28, CRATE), cube(fx + fw + 130, cy - 18, 34, 34, 28, CRATE, z=28),
-        tag(fx + fw + 160, cy, 70, "train.jsonl", f"{pairs_n:,} training pairs", CRATE),
+        tag(fx + fw + 160, cy, 70, "Training pairs", f"{pairs_n:,} ready", CRATE),
     ]
     return "".join(parts), fx + fw + 250, depth + 80
+
+
+# ponytail: keyword heuristics, tuned on Claude Code / Codex / Orca transcripts. Good enough to size
+# a dataset; label a sample by hand before trusting the split for real training.
+MACHINE = re.compile(r"(another claude session sent a message|<teammate-message|──── from:|you have \d+ orchestration"
+                     r"|please carry out this task from my|read (and fully execute )?/\S+|background \(from the session"
+                     r"|you are )")
+THAI = re.compile(r"[฀-๿]")
+
+
+def profile():
+    """Count what kinds of question-and-answer examples the store holds, for the training advice."""
+    c = dict.fromkeys(("asked", "thai", "steer", "brief", "review", "summary", "ocr"), 0)
+    for p in SESSIONS.glob("*/*.jsonl"):
+        worker = p.name.startswith("agent-")  # a Claude Code subagent: its prompt was written by another AI
+        for prompt, _ in pairs(lines(p)):
+            lo = " ".join(prompt.split()).lower()
+            if worker:
+                c["brief"] += 1
+            elif lo.startswith("this session is being continued"):
+                c["summary"] += 1
+            elif re.match(r"(transcribe|ocr|read) (all |the )?text (in|from) (this|the) (image|photo|scan|picture)", lo):
+                c["ocr"] += 1
+            elif MACHINE.match(lo):
+                pass  # one agent talking to another
+            elif len(lo) < 60:
+                c["steer"] += 1
+            else:
+                c["asked"] += 1
+                c["thai"] += bool(THAI.search(prompt))
+                c["review"] += bool(re.search(r"review|audit|ตรวจ", lo))
+    STORE.mkdir(parents=True, exist_ok=True)
+    (STORE / "profile.json").write_text(json.dumps(c))
+    return c
+
+
+STATUS = {"ready": "Ready now", "prep": "Needs preparation", "more": "Needs more examples",
+          "missing": "Not collected yet", "no": "Not recommended"}
+
+
+def recommendations(c, messages):
+    """What this store can train. Base models are open-weight releases checked 2026-11; update as they change."""
+    typed = c["asked"] + c["steer"]
+    rows = [  # title, what it gives you, examples you have, sensible minimum, forced status, start from, next step
+        ("Search everything you ever asked", "Find any past question or answer by meaning, in Thai or English.",
+         messages, 0, None, "Use BGE-M3 or SEA-Embedding as they are",
+         "No training. Index the store with an embedding model and search it."),
+        ("A test to judge any model before you switch", "Your own real requests, replayed on a candidate model, show whether it is good enough for you.",
+         c["asked"], 200, None, "Works with any model", "Set 200 varied requests aside and never train on them."),
+        ("Send easy prompts to a cheap model", "A tiny model reads each prompt and decides whether it needs the expensive model at all.",
+         typed, 2000, "prep" if typed >= 2000 else None, "Start from Gemma 4 E2B, fine-tuned as a classifier",
+         "Label each prompt easy or hard. A large model can label them in one pass."),
+        ("Write reports in your format", "Turn a task brief into a structured findings report in the style your agents already use.",
+         c["brief"] + c["review"], 1000, None, "Start from Gemma 4 12B or Qwen3.8-27B with LoRA",
+         "This teaches the format, not the investigation: the tool use behind each report is not stored."),
+        ("Summarise long sessions", "Compress a long conversation into the short summary an agent needs to carry on.",
+         c["summary"], 500, "prep" if c["summary"] >= 500 else None, "Start from Gemma 4 E4B or 12B with LoRA",
+         "Link each stored summary to the conversation it summarises."),
+        ("A Thai assistant in your own words", "Answers Thai requests the way you ask and the way you like them answered.",
+         c["thai"], 3000, None, "Start from Gemma 4 12B or Qwen3.8-27B with LoRA",
+         "Keep collecting, and import your ChatGPT and Gemini history."),
+        ("Read Thai text from images (OCR)", f"A small vision model that replaces paid OCR calls. The factory saw {c['ocr']:,} of them.",
+         0, 2000, "missing", "Start from Typhoon OCR 1.5 (2B), fine-tuned on your documents",
+         "The factory stores text only. Add the images together with their correct text."),
+        ("Thai speech to text", "Transcribe Thai speech and dialects without a paid service.",
+         0, 0, "missing", "Start from Whisper large-v3, fine-tuned", "Add audio clips together with their correct transcripts."),
+        ("Replace your coding agent", "A local model that edits code and runs tools the way Claude Code or Codex does.",
+         0, 0, "no", "",
+         "Tool calls are not stored, and no model you can host yourself matches these agents yet."),
+    ]
+    out, e = "", html.escape
+    for title, what, have, target, forced, model, step in rows:
+        status = forced or ("ready" if have >= target else "more")
+        meter = ""
+        if target:
+            meter = (f'<div class="meter"><i style="width:{min(100, 100 * have / target):.0f}%"></i></div>'
+                     f'<p class="cnt">' + (f"{have:,} examples; {target:,} is enough" if have >= target
+                                      else f"{have:,} of {target:,} examples") + "</p>")
+        elif have:
+            meter = f'<p class="cnt">{have:,} messages to search</p>'
+        out += (f'<li class="rec s-{status}"><div><h3>{e(title)}</h3><p>{e(what)}</p><p class="next">{e(step)}</p></div>'
+                f'<div><span class="chip">{STATUS[status]}</span>{meter}<p class="model">{e(model)}</p></div></li>')
+    return out
+
+
+def more_sources(have):
+    """How to bring in agents that are not in the store yet."""
+    here = Path(__file__).resolve()
+    tips = [
+        ("chatgpt", f"<b>ChatGPT:</b> ask for your data export in its settings, then run <code>python3 {html.escape(str(here))} import export.zip</code>"),
+        ("claude-chat", f"<b>Claude chat:</b> export your data in its settings, then run <code>python3 {html.escape(str(here))} import conversations.json</code>"),
+        ("grok", "<b>Grok, Cowork and others:</b> connect this factory to them as an MCP server and ask them to save each answer with <code>factory_log</code>"),
+    ]
+    out = "".join(f"<li>{tip}</li>" for key, tip in tips if key not in have)
+    return out or "<li>Every agent this factory knows about is already sending conversations in.</li>"
 
 
 def dashboard():
@@ -393,26 +519,32 @@ def dashboard():
     total = sum(m for _, _, m in agents)
     top = max((m for _, _, m in agents), default=0) or 1
     sources = "".join(
-        f'<tr style="--c:{paint[k]}"><td class="a"><i></i>{e(k)}</td><td class="n">{s:,}</td><td class="n">{m:,}</td>'
+        f'<tr style="--c:{paint[k]}"><td class="a"><i></i>{e(nice(k))}</td><td class="n">{s:,}</td><td class="n">{m:,}</td>'
         f'<td class="bar"><i style="width:{100 * m / top:.1f}%"></i></td></tr>' for k, s, m in agents)
     recent = ""
     for p in files[:25]:
         first = next((r for r in lines(p) if r.get("role") == "user"), {})
         snippet = " ".join(str(first.get("text") or "(no prompt)").split())[:160]
-        when = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-        recent += (f'<tr style="--c:{paint[p.parent.name]}"><td class="t">{when}</td>'
-                   f'<td class="a"><i></i>{e(p.parent.name)}</td><td class="q">{e(snippet)}</td></tr>')
+        mtime = p.stat().st_mtime
+        recent += (f'<tr style="--c:{paint[p.parent.name]}"><td class="t" data-t="{mtime:.0f}">'
+                   f'{datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M}</td>'
+                   f'<td class="a"><i></i>{e(nice(p.parent.name))}</td><td class="q">{e(snippet)}</td></tr>')
     train = STORE / "train.jsonl"
     pairs_n = train.read_bytes().count(b"\n") if train.exists() else 0
+    try:  # written by collect; counting needs a full parse, too slow for every tool call
+        counts = json.loads((STORE / "profile.json").read_text())
+    except (OSError, ValueError):
+        counts = profile()
     floor, gw, gd = scene(agents, total, pairs_n)
     fill = {
         "__NOW__": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "__SESSIONS__": f"{len(files):,}", "__MESSAGES__": f"{total:,}", "__PAIRS__": f"{pairs_n:,}",
-        "__NSOURCES__": f"{len(per)} agent" + "s" * (len(per) != 1), "__STORE__": e(str(STORE)),
+        "__NSOURCES__": f"{len(per)} AI agent" + "s" * (len(per) != 1), "__STORE__": e(str(STORE)),
         "__SCENE__": floor, "__GW__": str(gw), "__GD__": str(gd),
         "__SH__": f"{(gw + gd) * .36 + 140:.0f}", "__FIT__": f"{(gw + gd) * .72:.0f}",
+        "__RECS__": recommendations(counts, total), "__MORE__": more_sources(per),
         "__SOURCES__": sources or '<tr><td colspan="4">Nothing collected yet. Run: factory.py collect</td></tr>',
-        "__RECENT__": recent or '<tr><td colspan="3">No sessions yet.</td></tr>',
+        "__RECENT__": recent or '<tr><td colspan="3">No conversations yet.</td></tr>',
     }
     page = re.sub("|".join(fill), lambda m: fill[m.group()], PAGE)
     STORE.mkdir(parents=True, exist_ok=True)

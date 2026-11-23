@@ -104,8 +104,12 @@ assert not [p for p in tmp.rglob("*.jsonl") if f.STORE not in p.parents and home
 # the factory page: rebuilt by collect and by every tool call, prompt text escaped
 page = (f.STORE / "index.html").read_text()
 assert "index.html" in r[7]["result"]["content"][0]["text"]
-assert "claude-code" in page and "grok" in page and "__" not in page
+assert "Claude Code" in page and "Grok" in page and "__" not in page
 assert "&lt;script&gt;alert(1)" in page and "<script>alert" not in page
+assert page.count('class="rec ') == 9 and "Gemma 4" in page and "Claude Code" in page
+prof = json.loads((f.STORE / "profile.json").read_text())
+assert prof["asked"] == 0 and prof["steer"] >= 4, prof  # every fixture prompt is a short one
+assert "import export.zip" not in page and "factory_log" not in page, "tips only for agents not yet collected"
 assert page.count('class="rider"') == 3 * 7 + 3, "three crates per agent belt plus the outbound belt"
 
 print("ok")

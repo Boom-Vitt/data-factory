@@ -51,7 +51,7 @@ For other clients, add this to their MCP config:
 { "mcpServers": { "data-factory": { "command": "python3", "args": ["/path/to/data-factory/factory.py", "mcp"] } } }
 ```
 
-The first tool call in each agent session opens the factory page (`~/.data-factory/index.html`) in your browser: a 3D factory floor you can drag to turn, with one machine per agent, conveyor belts carrying conversations in and crates of training pairs coming out, plus tables of totals and your latest sessions. Every later call refreshes it, and the open tab reloads itself. It is a local file; nothing is served or uploaded.
+The first tool call in each agent session opens the factory page (`~/.data-factory/index.html`) in your browser: a 3D factory floor you can drag to turn, with one machine per agent, conveyor belts carrying conversations in and crates of training pairs coming out, plus tables of totals and your latest sessions. Under the floor it lists what your data can train (search, a test set, a prompt router, report writing, summaries, a Thai assistant, OCR, speech), how many examples you have for each, and which open model to start from. Every later call refreshes it, and the open tab reloads itself. It is a local file; nothing is served or uploaded.
 
 ### Ask your agent
 
