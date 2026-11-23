@@ -2,14 +2,17 @@
 
 # data-factory
 
+[![test](https://github.com/Boom-Vitt/data-factory/actions/workflows/test.yml/badge.svg)](https://github.com/Boom-Vitt/data-factory/actions/workflows/test.yml)
+
 ### One factory for every AI conversation you have ever had.
 
 You talk to Claude Code, Codex, Gemini, Antigravity, ChatGPT, Grok and a dozen other agents. Every question, every answer and every piece of finished work is scattered across hidden folders in a dozen formats, or locked in someone else's cloud.
 
 `data-factory` pulls all of it into one plain JSONL store on your own disk: searchable today, ready to fine-tune your own local model tomorrow.
 
-- **One file, zero dependencies.** `factory.py` is plain Python 3 standard library.
+- **One file, zero dependencies.** `factory.py` is plain Python standard library (3.9 or newer) and runs on macOS, Linux and Windows.
 - **Nothing leaves your machine.** No account, no server, no telemetry.
+- **You choose what is collected.** Name a folder and it is never read again.
 - **No hooks to install.** It reads the transcripts your agents already write.
 - **One MCP server**, connected to all your agents with one command.
 - **One page** that shows your whole factory, popped up in your browser whenever an agent uses it.
@@ -36,6 +39,26 @@ Run it again any time. Only sessions that changed are rewritten, so it is safe t
 ```bash
 (crontab -l 2>/dev/null; echo "0 * * * * python3 $PWD/data-factory/factory.py collect") | crontab -
 ```
+
+On Windows, the same with Task Scheduler:
+
+```bash
+schtasks /create /sc hourly /tn data-factory /tr "python C:\path\to\data-factory\factory.py collect"
+```
+
+### Choose what is collected
+
+Keep a folder out of the factory, for example client work:
+
+```bash
+python3 data-factory/factory.py exclude ~/work/client-project
+```
+
+This deletes the conversations already stored from that folder (and everything inside it), rebuilds the training files without them, and skips the folder on every later collect. `exclude` with no folder shows the list, and `exclude FOLDER --remove` takes one off again. The list is a plain file, `~/.data-factory/exclude.txt`.
+
+It works for agents that record which folder a conversation happened in: Claude Code and Codex. Gemini CLI, Antigravity, web exports and `factory_log` entries carry no folder, so they cannot be excluded this way.
+
+To stop the factory page opening in your browser, set `DATA_FACTORY_NO_OPEN=1` for the MCP server.
 
 ### Connect your agents
 
@@ -122,7 +145,14 @@ python3 factory.py export
 
 `ocr` indexes every `{"image": ..., "text": ...}` record in the JSONL manifests under a folder, as image + correct-text pairs for training an OCR model. It records where each image is rather than copying it, and keeps anything under a `test` path apart as a held-out test set.
 
-`export` writes `train.jsonl`: one prompt and its full answer per line, in the chat `messages` format that fine-tuning tools (MLX, Unsloth, Axolotl, llama.cpp) accept.
+`export` writes two files in the chat `messages` format that fine-tuning tools (MLX, Unsloth, Axolotl, llama.cpp) accept, one prompt and its full answer per line. It also runs at the end of every `collect`, so they are always current.
+
+| File | What is in it |
+| --- | --- |
+| `train.jsonl` | Requests you typed yourself (60 characters or longer) |
+| `train_briefs.jsonl` | Briefs one AI wrote for another, with the report that came back. Kept apart because both sides are machine-written |
+
+Left out of both: short steers ("done?", "continue"), agent-to-agent messages, context summaries, automated OCR calls, and exact repeats of a prompt. The sorting is by keyword rules, so check a sample before training on it.
 
 ## What gets collected
 
@@ -152,7 +182,8 @@ Your conversations contain your code, your clients and your keys. So:
 
 - The store lives **outside** this repository and is never committed.
 - Common secret shapes (API keys, tokens, JWTs, private keys) are replaced with `[REDACTED]` on the way in. This is a safety net, not a guarantee: run a real scanner before you share or train on the data.
-- Only collect conversations you have the right to keep.
+- Only collect conversations you have the right to keep, and `exclude` the folders you should not.
+- Some AI providers restrict using their models' output to train other models. Check the terms of the services you use before you train on this data.
 
 ## FAQ
 
@@ -170,7 +201,7 @@ Your conversations contain your code, your clients and your keys. So:
 python3 test_factory.py
 ```
 
-It runs against a temporary fake home and touches none of your data.
+It runs against a temporary fake home and touches none of your data. The same check runs on Linux, macOS and Windows for every pull request.
 
 ## License
 

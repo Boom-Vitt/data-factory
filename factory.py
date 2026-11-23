@@ -4,15 +4,16 @@
   factory.py collect            sweep local agent transcripts into the store
   factory.py import FILE        add a ChatGPT / Claude.ai export (.zip or conversations.json)
   factory.py ocr DIR            index image + correct-text pairs found in DIR (for OCR training)
-  factory.py export             write train.jsonl (prompt -> answer pairs, chat format)
+  factory.py export             write train.jsonl (requests you typed) and train_briefs.jsonl (agent briefs)
+  factory.py exclude [FOLDER]   never collect conversations from FOLDER, and remove the ones already stored
   factory.py search QUERY       find past questions and results
   factory.py show               open the factory page (a local HTML view of the store)
   factory.py mcp                run as an MCP server (factory_log, factory_search, factory_show)
   factory.py install [NAME]     connect that MCP server to Claude Code, Codex, Gemini CLI, Claude desktop
 
-Store: ~/.data-factory (override with DATA_FACTORY_HOME). Stdlib only.
+Store: ~/.data-factory (override with DATA_FACTORY_HOME). Stdlib only, Python 3.9+.
 """
-import argparse, html, json, math, os, re, shutil, subprocess, sys, webbrowser, zipfile
+import argparse, hashlib, html, json, math, os, re, shutil, subprocess, sys, webbrowser, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def text_of(content):
 
 
 def lines(path):
-    with open(path, errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
                 d = json.loads(line)
@@ -109,6 +110,47 @@ def clean_name(s):
     return re.sub(r"[^A-Za-z0-9_.-]", "-", str(s)).strip(".-")[:120] or "unknown"
 
 
+def excluded():
+    """Folders the user never wants collected: one absolute path per line in exclude.txt."""
+    try:
+        text = (STORE / "exclude.txt").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [Path(line.strip()) for line in text.splitlines() if line.strip()]
+
+
+def is_excluded(cwd, folders):
+    """True if cwd is one of the folders or inside one. Whole path parts: /work/app does not catch /work/app2."""
+    if not cwd or not folders:
+        return False
+    here = Path(cwd)
+    return any(here == f or f in here.parents for f in folders)
+
+
+def exclude(folder=None, remove=False):
+    """Add a folder to the exclude list and delete what was already stored from it (or take it off the list)."""
+    folders = excluded()
+    if folder:
+        typed = Path(folder).expanduser()
+        forms = {Path(os.path.abspath(typed)), typed.resolve()}  # agents record either form when links are involved
+        folders = [f for f in folders if f not in forms] + ([] if remove else sorted(forms))
+        STORE.mkdir(parents=True, exist_ok=True)
+        (STORE / "exclude.txt").write_text("".join(f"{f}\n" for f in folders), encoding="utf-8")
+        if remove:
+            print(f"{typed} will be collected again on the next collect")
+        else:
+            gone = 0
+            for p in SESSIONS.glob("*/*.jsonl"):
+                if any(is_excluded(r.get("cwd"), folders) for r in lines(p)):
+                    p.unlink()
+                    gone += 1
+            print(f"removed {gone:,} stored conversations from {typed}; it will not be collected again")
+            profile()
+            export()
+            dashboard()
+    print("excluded folders:" + "".join(f"\n  {f}" for f in folders) if folders else "no folders are excluded")
+
+
 def save(source, session, msgs):
     """Write one session file (atomically). Returns the number of messages kept."""
     recs = [
@@ -118,11 +160,15 @@ def save(source, session, msgs):
         if role in ("user", "assistant") and isinstance(text, str) and text.strip()
         and not (role == "user" and HARNESS.match(text))
     ]
+    out = SESSIONS / clean_name(source) / f"{clean_name(session)}.jsonl"
+    folders = excluded()
+    if any(is_excluded(r["cwd"], folders) for r in recs):
+        out.unlink(missing_ok=True)
+        return 0
     if recs:
-        out = SESSIONS / clean_name(source) / f"{clean_name(session)}.jsonl"
         out.parent.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(".tmp")
-        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs), encoding="utf-8")
         os.replace(tmp, out)
     return len(recs)
 
@@ -148,6 +194,7 @@ def collect(home=None):
             msgs += n
         print(f"{source:12} {seen:6} sessions found, {updated:6} updated, {msgs:8} messages written")
     profile()
+    export()
     dashboard()
 
 
@@ -182,7 +229,7 @@ def import_export(path):
             names = [n for n in z.namelist() if re.search(r"(^|/)conversations[^/]*\.json$", n)]
             convs = [c for n in names for c in json.loads(z.read(n))]
     else:
-        convs = json.loads(Path(path).read_text())
+        convs = json.loads(Path(path).read_text(encoding="utf-8"))
     done = msgs = 0
     for conv in convs:
         parsed = web(conv) if isinstance(conv, dict) else None
@@ -210,16 +257,33 @@ def pairs(recs):
 
 
 def export():
-    out, n = STORE / "train.jsonl", 0
+    """Write the training files: requests you typed (train.jsonl) and agent briefs (train_briefs.jsonl)."""
     STORE.mkdir(parents=True, exist_ok=True)
-    with open(out, "w") as f:
+    files = {"asked": STORE / "train.jsonl", "brief": STORE / "train_briefs.jsonl"}
+    count = dict.fromkeys(("asked", "brief", "duplicate", "steer", "machine", "summary", "ocr"), 0)
+    outs = {k: open(p, "w", encoding="utf-8") for k, p in files.items()}
+    seen = set()
+    try:
         for p in sorted(SESSIONS.glob("*/*.jsonl")):
             for prompt, answer in pairs(lines(p)):
-                f.write(json.dumps({"source": p.parent.name, "messages": [
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": answer}]}, ensure_ascii=False) + "\n")
-                n += 1
-    print(f"{n} training pairs -> {out}")
+                k = kind(p, prompt)
+                if k in outs:
+                    digest = hashlib.md5(" ".join(prompt.split()).lower().encode()).digest()
+                    if digest in seen:
+                        k = "duplicate"
+                    else:
+                        seen.add(digest)
+                        outs[k].write(json.dumps({"source": p.parent.name, "kind": k, "messages": [
+                            {"role": "user", "content": prompt},
+                            {"role": "assistant", "content": answer}]}, ensure_ascii=False) + "\n")
+                count[k] += 1
+    finally:
+        for f in outs.values():
+            f.close()
+    print(f"{count['asked']:,} requests you typed -> {files['asked']}")
+    print(f"{count['brief']:,} agent briefs -> {files['brief']}")
+    print(f"left out: {count['duplicate']:,} duplicates, {count['steer']:,} short steers, "
+          f"{count['machine']:,} agent-to-agent messages, {count['summary']:,} context summaries, {count['ocr']:,} OCR calls")
 
 
 def search(query, limit=20):
@@ -241,7 +305,7 @@ def log(source, prompt, response, model=None):
     now = datetime.now(timezone.utc)
     out = SESSIONS / clean_name(source.lower()) / f"mcp-{now:%Y-%m-%d}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "a") as f:
+    with open(out, "a", encoding="utf-8") as f:
         for role, text in (("user", prompt), ("assistant", response)):
             f.write(json.dumps({"source": out.parent.name, "session": out.stem, "role": role,
                                 "text": redact(text), "ts": now.isoformat(), "model": model,
@@ -284,7 +348,7 @@ def add_ocr(folder):
     out = STORE / "ocr" / f"{clean_name(root.name)}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".tmp")
-    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in found.values()))
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in found.values()), encoding="utf-8")
     os.replace(tmp, out)
     n = {k: sum(r["split"] == k for r in found.values()) for k in SPLITS}
     print(f"{len(found):,} image + text pairs -> {out}")
@@ -463,6 +527,21 @@ MACHINE = re.compile(r"(another claude session sent a message|<teammate-message|
 THAI = re.compile(r"[฀-๿]")
 
 
+def kind(session_file, prompt):
+    """What sort of turn a prompt opens: asked (you typed it), steer (a short nudge), brief (written by an AI
+    for a subagent), summary (context carried over), ocr (an automated OCR call) or machine (agents talking)."""
+    lo = " ".join(prompt.split()).lower()
+    if session_file.name.startswith("agent-"):  # a Claude Code subagent transcript
+        return "brief"
+    if lo.startswith("this session is being continued"):
+        return "summary"
+    if re.match(r"(transcribe|ocr|read) (all |the )?text (in|from) (this|the) (image|photo|scan|picture)", lo):
+        return "ocr"
+    if MACHINE.match(lo):
+        return "machine"
+    return "steer" if len(lo) < 60 else "asked"
+
+
 def profile():
     """Count what kinds of question-and-answer examples the store holds, for the training advice."""
     c = dict.fromkeys(("asked", "thai", "steer", "brief", "review", "summary", "ocr", "ocr_pairs", "ocr_test"), 0)
@@ -470,25 +549,15 @@ def profile():
         for r in lines(p):
             c["ocr_test" if r.get("split") == "test" else "ocr_pairs"] += 1
     for p in SESSIONS.glob("*/*.jsonl"):
-        worker = p.name.startswith("agent-")  # a Claude Code subagent: its prompt was written by another AI
         for prompt, _ in pairs(lines(p)):
-            lo = " ".join(prompt.split()).lower()
-            if worker:
-                c["brief"] += 1
-            elif lo.startswith("this session is being continued"):
-                c["summary"] += 1
-            elif re.match(r"(transcribe|ocr|read) (all |the )?text (in|from) (this|the) (image|photo|scan|picture)", lo):
-                c["ocr"] += 1
-            elif MACHINE.match(lo):
-                pass  # one agent talking to another
-            elif len(lo) < 60:
-                c["steer"] += 1
-            else:
-                c["asked"] += 1
+            k = kind(p, prompt)
+            if k in c:  # agent-to-agent messages are not counted
+                c[k] += 1
+            if k == "asked":
                 c["thai"] += bool(THAI.search(prompt))
-                c["review"] += bool(re.search(r"review|audit|ตรวจ", lo))
+                c["review"] += bool(re.search(r"review|audit|ตรวจ", prompt.lower()))
     STORE.mkdir(parents=True, exist_ok=True)
-    (STORE / "profile.json").write_text(json.dumps(c))
+    (STORE / "profile.json").write_text(json.dumps(c), encoding="utf-8")
     return c
 
 
@@ -580,10 +649,9 @@ def dashboard():
         recent += (f'<tr style="--c:{paint[p.parent.name]}"><td class="t" data-t="{mtime:.0f}">'
                    f'{datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M}</td>'
                    f'<td class="a"><i></i>{e(nice(p.parent.name))}</td><td class="q">{e(snippet)}</td></tr>')
-    train = STORE / "train.jsonl"
-    pairs_n = train.read_bytes().count(b"\n") if train.exists() else 0
+    pairs_n = sum(p.read_bytes().count(b"\n") for p in (STORE / "train.jsonl", STORE / "train_briefs.jsonl") if p.exists())
     try:  # written by collect; counting needs a full parse, too slow for every tool call
-        counts = json.loads((STORE / "profile.json").read_text())
+        counts = json.loads((STORE / "profile.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         counts = profile()
     floor, gw, gd = scene(agents, total, pairs_n)
@@ -602,7 +670,7 @@ def dashboard():
     STORE.mkdir(parents=True, exist_ok=True)
     out = STORE / "index.html"
     tmp = out.with_suffix(".tmp")
-    tmp.write_text(page)
+    tmp.write_text(page, encoding="utf-8")
     os.replace(tmp, out)
     return out
 
@@ -663,8 +731,9 @@ def handle(method, p):
 
 
 def mcp():
-    out = os.fdopen(os.dup(1), "w")  # replies go here; anything else printed (browser launchers) goes to stderr
+    out = os.fdopen(os.dup(1), "w", encoding="utf-8")  # replies go here; anything else printed goes to stderr
     os.dup2(2, 1)
+    sys.stdin.reconfigure(encoding="utf-8")  # clients send UTF-8 whatever the console code page is
     for line in sys.stdin:
         try:
             req = json.loads(line)
@@ -713,12 +782,12 @@ def install(only=()):
             print(f"{name:15} not installed, skipped")
             return
         try:  # merge into the app's config; never overwrite a file we cannot parse
-            data = json.loads(cfg.read_text()) if cfg.exists() else {}
+            data = json.loads(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
             data.setdefault("mcpServers", {})[tag] = {"command": py, "args": [me, "mcp"]}
             if cfg.exists():
                 shutil.copy2(cfg, cfg.with_name(cfg.name + ".bak"))
             tmp = cfg.with_name(cfg.name + ".tmp")
-            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             os.replace(tmp, cfg)
             print(f"{name:15} connected. Quit and reopen the app to load it. (previous config saved as {cfg.name}.bak)")
         except (ValueError, AttributeError, TypeError, OSError) as e:
@@ -732,6 +801,9 @@ def main():
     sub.add_parser("import").add_argument("file")
     sub.add_parser("ocr").add_argument("folder")
     sub.add_parser("export")
+    x = sub.add_parser("exclude")
+    x.add_argument("folder", nargs="?")
+    x.add_argument("--remove", action="store_true", help="take FOLDER off the list")
     s = sub.add_parser("search")
     s.add_argument("query")
     s.add_argument("-n", "--limit", type=int, default=20)
@@ -739,6 +811,8 @@ def main():
     sub.add_parser("install").add_argument("only", nargs="*", metavar="NAME", help="e.g. claude, codex, gemini")
     sub.add_parser("mcp")
     a = ap.parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")  # a legacy console must not crash on Thai text
     if a.cmd == "collect":
         collect()
     elif a.cmd == "import":
@@ -747,6 +821,8 @@ def main():
         add_ocr(a.folder)
     elif a.cmd == "export":
         export()
+    elif a.cmd == "exclude":
+        exclude(a.folder, a.remove)
     elif a.cmd == "search":
         print("\n".join(search(a.query, a.limit)) or "no matches")
     elif a.cmd == "install":
