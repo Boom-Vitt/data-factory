@@ -105,6 +105,7 @@ assert not [p for p in tmp.rglob("*.jsonl") if f.STORE not in p.parents and home
 page = (f.STORE / "index.html").read_text()
 assert "index.html" in r[7]["result"]["content"][0]["text"]
 assert "claude-code" in page and "grok" in page and "__" not in page
-assert "&lt;script&gt;alert(1)" in page and "<script>" not in page
+assert "&lt;script&gt;alert(1)" in page and "<script>alert" not in page
+assert page.count('class="rider"') == 3 * 7 + 3, "three crates per agent belt plus the outbound belt"
 
 print("ok")

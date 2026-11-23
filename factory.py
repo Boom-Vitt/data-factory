@@ -10,7 +10,7 @@
 
 Store: ~/.data-factory (override with DATA_FACTORY_HOME). Stdlib only.
 """
-import argparse, html, json, os, re, sys, webbrowser, zipfile
+import argparse, html, json, math, os, re, sys, webbrowser, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -249,27 +249,133 @@ def log(source, prompt, response, model=None):
 # --- the factory page ---------------------------------------------------------
 
 PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="20">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="60">
 <title>data-factory</title><style>
-:root{--bg:#f6f5f1;--card:#fff;--ink:#1c1b19;--dim:#6f6b63;--line:#e4e1d9;--acc:#c2410c}
-@media(prefers-color-scheme:dark){:root{--bg:#141412;--card:#1e1d1a;--ink:#edeae3;--dim:#9a958a;--line:#2e2c27;--acc:#fb923c}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Sukhumvit Set",Thonburi,sans-serif}
-main{max-width:980px;margin:0 auto;padding:32px 16px 48px}h1{font-size:22px;margin:0}h1 b{color:var(--acc)}
-.sub{color:var(--dim);margin:2px 0 24px;font-size:13px}h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:28px 0 8px}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
-.tile,.box{background:var(--card);border:1px solid var(--line);border-radius:10px}.tile{padding:14px 16px}
-.tile b{display:block;font-size:26px;font-variant-numeric:tabular-nums}.tile span{color:var(--dim);font-size:13px}
-.box{overflow-x:auto}table{border-collapse:collapse;width:100%}td,th{padding:8px 14px;text-align:left;border-top:1px solid var(--line);vertical-align:top}
-tr:first-child>*{border-top:0}th{font-size:12px;color:var(--dim);font-weight:500}.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.t,.a{white-space:nowrap}.t{color:var(--dim);font-variant-numeric:tabular-nums}.bar{width:40%;min-width:90px}.bar i{display:block;height:8px;margin-top:8px;border-radius:4px;background:var(--acc)}
-.q{overflow-wrap:anywhere}footer{color:var(--dim);font-size:12px;margin-top:24px}
-</style><main><h1><b>data</b>-factory</h1>
-<p class="sub">Every AI conversation on this machine. Updated __NOW__. This page is a local file; nothing is uploaded.</p>
-<div class="tiles"><div class="tile"><b>__SESSIONS__</b><span>sessions</span></div><div class="tile"><b>__MESSAGES__</b><span>messages</span></div>
-<div class="tile"><b>__PAIRS__</b><span>training pairs</span></div><div class="tile"><b>__NSOURCES__</b><span>agents</span></div></div>
-<h2>By agent</h2><div class="box"><table><tr><th>Agent</th><th class="n">Sessions</th><th class="n">Messages</th><th></th></tr>__SOURCES__</table></div>
+:root{--bg:#e6e9eb;--ink:#14171a;--dim:#5b6570;--line:#c3c9ce;--floor:#d3d8dc;--joint:#bcc3c9;--wall:#aeb6bd;
+--belt:#2a2e32;--hazard:#f2c200;--glow:#fff6c9;--tag:#ffffff;--rz:40deg;--rx:58deg;--s:1}
+@media(prefers-color-scheme:dark){:root{--bg:#14171a;--ink:#e8ecef;--dim:#93a0ab;--line:#2c3339;--floor:#1f2428;
+--joint:#2b3238;--wall:#59636c;--belt:#0b0d0e;--hazard:#f2c200;--glow:#ffd96a;--tag:#262c31}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Sukhumvit Set",Thonburi,sans-serif}
+main{max-width:1040px;margin:0 auto;padding:28px 16px 48px}
+h1,h2,.tag b,.n{font-family:"Avenir Next Condensed","DIN Condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif}
+h1{font-size:44px;line-height:1;margin:0;font-weight:700;letter-spacing:.01em}
+.sub{margin:8px 0 0;max-width:70ch}.sub span{color:var(--dim)}
+h2{font-size:22px;font-weight:600;margin:36px 0 6px}
+.stage{position:relative;height:calc(__SH__px*var(--s));margin:18px 0 0;overflow:hidden;background:var(--floor);
+border-top:6px solid var(--hazard);perspective:1800px;cursor:grab;touch-action:pan-y;user-select:none;-webkit-user-select:none}
+.stage:active{cursor:grabbing}
+.world{position:absolute;left:50%;top:57%;width:__GW__px;height:__GD__px;margin:calc(__GD__px/-2) 0 0 calc(__GW__px/-2);
+transform:scale(var(--s)) rotateX(var(--rx)) rotateZ(var(--rz));transform-style:preserve-3d}
+.ground{position:absolute;inset:-400px;background-image:linear-gradient(var(--joint) 2px,transparent 2px),
+linear-gradient(90deg,var(--joint) 2px,transparent 2px);background-size:80px 80px}
+.zone{position:absolute;border:3px dashed var(--hazard)}
+.cube,.rider,.tag,.puff{position:absolute;left:var(--x);top:var(--y)}
+.cube{width:var(--w);height:var(--d);transform:translateZ(var(--z));transform-style:preserve-3d}
+.cube i{position:absolute;display:block;background-color:var(--c);box-shadow:inset 0 0 0 1px rgba(0,0,0,.16)}
+.cube .t{inset:0;transform:translateZ(var(--h))}
+.cube .f,.cube .b{left:0;width:100%;height:var(--h);filter:brightness(.8)}
+.cube .f{top:calc(100% - var(--h));transform-origin:bottom;transform:rotateX(-90deg)}
+.cube .b{top:0;transform-origin:top;transform:rotateX(90deg)}
+.cube .r,.cube .l{top:0;height:100%;width:var(--h);filter:brightness(.62)}
+.cube .r{left:calc(100% - var(--h));transform-origin:right;transform:rotateY(90deg)}
+.cube .l{left:0;transform-origin:left;transform:rotateY(-90deg)}
+.fac .f,.fac .b{background-image:repeating-linear-gradient(90deg,transparent 0 16px,var(--glow) 16px 34px);
+background-size:100% 26px;background-position:0 42%;background-repeat:no-repeat}
+.fac .r,.fac .l{background-image:repeating-linear-gradient(0deg,transparent 0 16px,var(--glow) 16px 34px);
+background-size:26px 100%;background-position:42% 0;background-repeat:no-repeat}
+.rider{transform-style:preserve-3d;animation:ride var(--t) linear var(--dl) infinite}
+@keyframes ride{from{transform:translate3d(0,0,8px)}to{transform:translate3d(var(--len),0,8px)}}
+.tag{transform:translateZ(var(--z)) rotateZ(calc(-1*var(--rz))) rotateX(calc(-1*var(--rx))) translate(-50%,-100%);
+transform-origin:0 0;white-space:nowrap;background:var(--tag);color:var(--ink);padding:3px 9px 4px;font-size:12px;line-height:1.25;
+border-left:4px solid var(--c,var(--hazard));box-shadow:0 1px 0 rgba(0,0,0,.25)}
+.tag b{display:block;font-size:17px;font-weight:600;letter-spacing:.01em}
+.puff{width:26px;height:26px;margin:-13px;border-radius:50%;background:var(--dim);opacity:0;animation:puff 5s linear var(--dl) infinite}
+@keyframes puff{0%{opacity:0;transform:translateZ(var(--z)) rotateZ(calc(-1*var(--rz))) rotateX(calc(-1*var(--rx))) scale(.5)}
+15%{opacity:.45}100%{opacity:0;transform:translateZ(calc(var(--z) + 120px)) rotateZ(calc(-1*var(--rz))) rotateX(calc(-1*var(--rx))) scale(2)}}
+@media(prefers-reduced-motion:reduce){.rider,.puff{animation:none}}
+.hint{color:var(--dim);font-size:13px;margin:6px 0 0}
+.box{overflow-x:auto}table{border-collapse:collapse;width:100%}
+td,th{padding:8px 14px 8px 0;text-align:left;border-top:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--dim);font-weight:500;border-top:2px solid var(--ink)}
+.n{text-align:right;font-size:18px;white-space:nowrap}.t,.a{white-space:nowrap}.t{color:var(--dim);font-variant-numeric:tabular-nums}
+.a i{display:inline-block;width:10px;height:10px;margin-right:8px;background:var(--c)}
+.bar{width:38%;min-width:90px}.bar i{display:block;height:10px;margin-top:8px;background:var(--c)}
+.q{overflow-wrap:anywhere}footer{color:var(--dim);font-size:13px;margin-top:28px}
+</style><main><h1>data-factory</h1>
+<p class="sub">__SESSIONS__ sessions, __MESSAGES__ messages and __PAIRS__ training pairs from __NSOURCES__ on this machine.
+<span>Updated __NOW__. This page is a local file; nothing is uploaded.</span></p>
+<div class="stage" role="img" aria-label="3D factory floor: each agent is a machine sending crates of conversations into the factory, which ships training pairs. The same numbers are in the tables below."><div class="world"><div class="ground"></div>__SCENE__</div></div>
+<p class="hint">Drag the floor to turn it. Taller machines hold more messages; faster belts are busier agents.</p>
+<h2>What each agent sent in</h2><div class="box"><table><tr><th>Agent</th><th class="n">Sessions</th><th class="n">Messages</th><th></th></tr>__SOURCES__</table></div>
 <h2>Latest sessions</h2><div class="box"><table><tr><th>Last activity</th><th>Agent</th><th>First prompt</th></tr>__RECENT__</table></div>
-<footer>Store: __STORE__</footer></main></html>"""
+<footer>Stored in __STORE__</footer></main>
+<script>
+const st=document.querySelector('.stage'),R=document.documentElement.style;let rz=40,rx=58;
+try{[rz,rx]=JSON.parse(sessionStorage.df)}catch(e){}
+const set=()=>{R.setProperty('--rz',rz+'deg');R.setProperty('--rx',rx+'deg');try{sessionStorage.df=JSON.stringify([rz,rx])}catch(e){}};
+const fit=()=>R.setProperty('--s',Math.min(1,st.clientWidth/__FIT__));
+st.onpointerdown=e=>{st.setPointerCapture(e.pointerId);let x=e.clientX,y=e.clientY;
+st.onpointermove=m=>{rz-=(m.clientX-x)*.4;rx=Math.max(30,Math.min(80,rx-(m.clientY-y)*.3));x=m.clientX;y=m.clientY;set()}};
+st.onpointerup=st.onpointercancel=()=>st.onpointermove=null;addEventListener('resize',fit);fit();set();
+</script></html>"""
+
+PAINTS = ["#2f7d6b", "#2b5fa8", "#a63f2b", "#6a5a9c", "#b07a1e", "#1f7f8c", "#8a3f6b", "#55626e"]  # machine enamel
+CRATE = "#c9a063"
+
+
+def cube(x, y, w, d, h, c, z=0, cls=""):
+    return (f'<div class="cube {cls}" style="--x:{x:.0f}px;--y:{y:.0f}px;--w:{w:.0f}px;--d:{d:.0f}px;'
+            f'--h:{h:.0f}px;--z:{z:.0f}px;--c:{c}"><i class="t"></i><i class="f"></i><i class="b"></i>'
+            f'<i class="r"></i><i class="l"></i></div>')
+
+
+def tag(x, y, z, title, note, c="var(--hazard)"):
+    return (f'<div class="tag" style="--x:{x:.0f}px;--y:{y:.0f}px;--z:{z:.0f}px;--c:{c}">'
+            f'<b>{html.escape(title)}</b>{html.escape(note)}</div>')
+
+
+def riders(x, y, length, seconds, c):
+    return "".join(
+        f'<div class="rider" style="--x:{x:.0f}px;--y:{y:.0f}px;--len:{length:.0f}px;--t:{seconds:.1f}s;'
+        f'--dl:{-seconds * k / 3:.1f}s">{cube(0, 0, 12, 12, 10, c)}</div>' for k in range(3))
+
+
+def scene(agents, total, pairs_n):
+    """The factory floor: one machine per agent, belts into the factory, crates of training pairs out.
+    Returns (html, floor width, floor depth). Units are px on the floor plane; z is up."""
+    agents = agents or [("nothing collected yet", 0, 0)]
+    n = len(agents)
+    slot = max(52, min(96, 440 // n))  # floor depth per machine
+    mw, depth, fx, fw, fh = slot * .62, n * slot, 420, 190, 110
+    top = max(m for _, _, m in agents) or 1
+    cy = 40 + depth / 2
+    parts = []
+    for i, (name, _, m) in enumerate(agents):
+        y, c = 40 + i * slot, PAINTS[i % len(PAINTS)]
+        h = 26 + 120 * math.log1p(m) / math.log1p(top)
+        seconds = 9 - 5 * m / top  # busier agents ship faster
+        parts += [cube(40, y + (slot - mw) / 2, mw, mw, h, c),
+                  cube(40 + mw, y + slot / 2 - 9, fx - 40 - mw, 18, 8, "var(--belt)"),
+                  riders(40 + mw / 2, y + slot / 2 - 6, fx - 20 - mw / 2, seconds, c),
+                  tag(40 + mw / 2, y + slot / 2, h + 10, name, f"{m:,} messages", c)]
+    parts += [
+        cube(fx, 40, fw, depth, fh, "var(--wall)", cls="fac"),
+        cube(fx - 8, 32, fw + 16, depth + 16, 8, "var(--hazard)", z=fh),            # roof
+        cube(fx + fw - 52, 50, 22, 22, 74, "var(--wall)", z=fh + 8),                # chimneys
+        cube(fx + fw - 52, 84, 22, 22, 52, "var(--wall)", z=fh + 8),
+        f'<div class="puff" style="--x:{fx + fw - 41}px;--y:61px;--z:{fh + 96}px;--dl:0s"></div>',
+        f'<div class="puff" style="--x:{fx + fw - 41}px;--y:61px;--z:{fh + 96}px;--dl:-2.5s"></div>',
+        f'<div class="puff" style="--x:{fx + fw - 41}px;--y:95px;--z:{fh + 74}px;--dl:-1.2s"></div>',
+        tag(fx + fw / 2 - 20, cy + 10, fh + 22, "data-factory", f"{total:,} messages stored"),
+        cube(fx + fw, cy - 9, 120, 18, 8, "var(--belt)"),                           # outbound belt
+        riders(fx + fw - 14, cy - 6, 126, 5, CRATE),
+        f'<div class="zone" style="left:{fx + fw + 108}px;top:{cy - 52:.0f}px;width:104px;height:104px"></div>',
+        cube(fx + fw + 122, cy - 38, 34, 34, 28, CRATE), cube(fx + fw + 122, cy + 4, 34, 34, 28, CRATE),
+        cube(fx + fw + 162, cy - 18, 34, 34, 28, CRATE), cube(fx + fw + 130, cy - 18, 34, 34, 28, CRATE, z=28),
+        tag(fx + fw + 160, cy, 70, "train.jsonl", f"{pairs_n:,} training pairs", CRATE),
+    ]
+    return "".join(parts), fx + fw + 250, depth + 80
 
 
 def dashboard():
@@ -282,24 +388,29 @@ def dashboard():
         s = per.setdefault(p.parent.name, [0, 0])
         s[0] += 1
         s[1] += p.read_bytes().count(b"\n")
-    top = max((m for _, m in per.values()), default=0) or 1
+    agents = sorted(((k, s, m) for k, (s, m) in per.items()), key=lambda a: -a[2])
+    paint = {k: PAINTS[i % len(PAINTS)] for i, (k, _, _) in enumerate(agents)}
+    total = sum(m for _, _, m in agents)
+    top = max((m for _, _, m in agents), default=0) or 1
     sources = "".join(
-        f'<tr><td class="a">{e(k)}</td><td class="n">{s:,}</td><td class="n">{m:,}</td>'
-        f'<td class="bar"><i style="width:{100 * m / top:.1f}%"></i></td></tr>'
-        for k, (s, m) in sorted(per.items(), key=lambda kv: -kv[1][1]))
+        f'<tr style="--c:{paint[k]}"><td class="a"><i></i>{e(k)}</td><td class="n">{s:,}</td><td class="n">{m:,}</td>'
+        f'<td class="bar"><i style="width:{100 * m / top:.1f}%"></i></td></tr>' for k, s, m in agents)
     recent = ""
     for p in files[:25]:
         first = next((r for r in lines(p) if r.get("role") == "user"), {})
         snippet = " ".join(str(first.get("text") or "(no prompt)").split())[:160]
         when = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-        recent += f'<tr><td class="t">{when}</td><td class="a">{e(p.parent.name)}</td><td class="q">{e(snippet)}</td></tr>'
+        recent += (f'<tr style="--c:{paint[p.parent.name]}"><td class="t">{when}</td>'
+                   f'<td class="a"><i></i>{e(p.parent.name)}</td><td class="q">{e(snippet)}</td></tr>')
     train = STORE / "train.jsonl"
     pairs_n = train.read_bytes().count(b"\n") if train.exists() else 0
+    floor, gw, gd = scene(agents, total, pairs_n)
     fill = {
-        "__NOW__": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "__SESSIONS__": f"{len(files):,}", "__MESSAGES__": f"{sum(m for _, m in per.values()):,}",
-        "__PAIRS__": f"{pairs_n:,}",
-        "__NSOURCES__": str(len(per)), "__STORE__": e(str(STORE)),
+        "__NOW__": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "__SESSIONS__": f"{len(files):,}", "__MESSAGES__": f"{total:,}", "__PAIRS__": f"{pairs_n:,}",
+        "__NSOURCES__": f"{len(per)} agent" + "s" * (len(per) != 1), "__STORE__": e(str(STORE)),
+        "__SCENE__": floor, "__GW__": str(gw), "__GD__": str(gd),
+        "__SH__": f"{(gw + gd) * .36 + 140:.0f}", "__FIT__": f"{(gw + gd) * .72:.0f}",
         "__SOURCES__": sources or '<tr><td colspan="4">Nothing collected yet. Run: factory.py collect</td></tr>',
         "__RECENT__": recent or '<tr><td colspan="3">No sessions yet.</td></tr>',
     }

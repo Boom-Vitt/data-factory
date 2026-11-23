@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.svg" alt="data-factory: every AI conversation you have ever had, in one factory on your own disk" width="100%"></p>
+
 # data-factory
 
 ### One factory for every AI conversation you have ever had.
@@ -49,7 +51,7 @@ For other clients, add this to their MCP config:
 { "mcpServers": { "data-factory": { "command": "python3", "args": ["/path/to/data-factory/factory.py", "mcp"] } } }
 ```
 
-The first tool call in each agent session opens the factory page (`~/.data-factory/index.html`) in your browser: totals per agent and your latest sessions. Every later call refreshes it, and the open tab reloads itself. It is a local file; nothing is served or uploaded.
+The first tool call in each agent session opens the factory page (`~/.data-factory/index.html`) in your browser: a 3D factory floor you can drag to turn, with one machine per agent, conveyor belts carrying conversations in and crates of training pairs coming out, plus tables of totals and your latest sessions. Every later call refreshes it, and the open tab reloads itself. It is a local file; nothing is served or uploaded.
 
 ### Ask your agent
 
