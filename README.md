@@ -54,7 +54,7 @@ Keep a folder out of the factory, for example client work:
 python3 data-factory/factory.py exclude ~/work/client-project
 ```
 
-This deletes the conversations already stored from that folder (and everything inside it), rebuilds the training files without them, and skips the folder on every later collect. `exclude` with no folder shows the list, and `exclude FOLDER --remove` takes one off again. The list is a plain file, `~/.data-factory/exclude.txt`.
+This deletes the conversations already stored from that folder (and everything inside it) together with the images and files pasted into them, rebuilds the training files without them, and skips the folder on every later collect. `exclude` with no folder shows the list, and `exclude FOLDER --remove` takes one off again. The list is a plain file, `~/.data-factory/exclude.txt`.
 
 It works for agents that record which folder a conversation happened in: Claude Code and Codex. Gemini CLI, Antigravity, web exports and `factory_log` entries carry no folder, so they cannot be excluded this way.
 
@@ -174,7 +174,9 @@ Every message becomes one line:
 {"source": "codex", "session": "rollout-…", "role": "user", "text": "…", "ts": "2026-11-14T09:42:06Z", "model": "…", "cwd": "/path/to/project"}
 ```
 
-Stored as `~/.data-factory/sessions/<source>/<session>.jsonl` (set `DATA_FACTORY_HOME` to move it). Tool calls, tool output, images and harness chatter are dropped, so what remains is what you asked and what the agent told you.
+Stored as `~/.data-factory/sessions/<source>/<session>.jsonl` (set `DATA_FACTORY_HOME` to move it). Tool calls, tool output and harness chatter are dropped, so what remains is what you asked and what the agent told you.
+
+Images and files you pasted into a chat are kept too (Claude Code and Codex). Each is saved once under `~/.data-factory/media/`, named by its content hash, and the message that carried it gains a `"media": ["ab/abcd….png"]` field. Images an agent read by itself through a tool, such as screenshots, are tool output and are not stored.
 
 ## Privacy
 
@@ -182,6 +184,7 @@ Your conversations contain your code, your clients and your keys. So:
 
 - The store lives **outside** this repository and is never committed.
 - Common secret shapes (API keys, tokens, JWTs, private keys) are replaced with `[REDACTED]` on the way in. This is a safety net, not a guarantee: run a real scanner before you share or train on the data.
+- Pasted images and files are stored exactly as they were. Nothing inside a picture is redacted, so a screenshot of a password stays a screenshot of a password.
 - Only collect conversations you have the right to keep, and `exclude` the folders you should not.
 - Some AI providers restrict using their models' output to train other models. Check the terms of the services you use before you train on this data.
 
@@ -193,7 +196,7 @@ Your conversations contain your code, your clients and your keys. So:
 
 **An agent is missing.** A source is one glob and one ~6-line parser in `SOURCES` in `factory.py`. Pull requests welcome; please include a line in `test_factory.py`.
 
-**Is the format stable?** The seven fields above are. Agent transcript formats are not, and they change without notice: if a source suddenly collects nothing, open an issue.
+**Is the format stable?** The seven fields above are, plus the optional `media` list. Agent transcript formats are not, and they change without notice: if a source suddenly collects nothing, open an issue.
 
 ## Contributing
 
