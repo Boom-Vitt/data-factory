@@ -11,7 +11,7 @@ You talk to Claude Code, Codex, Gemini, Antigravity, ChatGPT, Grok and a dozen o
 - **One file, zero dependencies.** `factory.py` is plain Python 3 standard library.
 - **Nothing leaves your machine.** No account, no server, no telemetry.
 - **No hooks to install.** It reads the transcripts your agents already write.
-- **One MCP server** for the agents that keep no local transcript.
+- **One MCP server**, connected to all your agents with one command.
 - **One page** that shows your whole factory, popped up in your browser whenever an agent uses it.
 
 ## Quick start
@@ -37,21 +37,60 @@ Run it again any time. Only sessions that changed are rewritten, so it is safe t
 (crontab -l 2>/dev/null; echo "0 * * * * python3 $PWD/data-factory/factory.py collect") | crontab -
 ```
 
-### Set up your agent
+### Connect your agents
 
-Give any MCP-capable agent three tools, `factory_log`, `factory_search` and `factory_show`:
+One command connects the factory to every AI client it finds on your machine:
 
 ```bash
-claude mcp add data-factory -- python3 /path/to/data-factory/factory.py mcp
+python3 data-factory/factory.py install
 ```
 
-For other clients, add this to their MCP config:
+```text
+Claude Code     connected. Start a new session to use it.
+Codex           connected. Start a new session to use it.
+Gemini CLI      connected. Start a new session to use it.
+Claude desktop  connected. Quit and reopen the app to load it. (previous config saved as claude_desktop_config.json.bak)
+```
+
+Clients that are not installed are skipped. To connect just one, name it: `factory.py install codex`.
+
+Each client then has three tools: `factory_log`, `factory_search` and `factory_show`. Clients load MCP servers when a session starts, so open a new session before you look for them.
+
+| Client | Where to see it |
+| --- | --- |
+| Claude Code | type `/mcp` in a new session |
+| Codex | `codex mcp list` |
+| Gemini CLI | `gemini mcp list` |
+| Claude desktop app | with the app's local MCP servers, after a restart |
+
+The first tool call in each agent session opens the factory page (`~/.data-factory/index.html`) in your browser: a 3D factory floor you can drag to turn, with one machine per agent, conveyor belts carrying conversations in and crates of training pairs coming out, plus tables of totals and your latest sessions. Under the floor it lists what your data can train (search, a test set, a prompt router, report writing, summaries, a Thai assistant, OCR, speech), how many examples you have for each, and which open model to start from. Every later call refreshes it, and the open tab reloads itself. It is a local file; nothing is served or uploaded.
+
+<details>
+<summary>Set it up by hand, or in another MCP client</summary>
+
+Any client that can launch a local (stdio) MCP server works. The command is `python3 /path/to/data-factory/factory.py mcp`.
+
+```bash
+claude mcp add --scope user data-factory -- python3 /path/to/data-factory/factory.py mcp
+```
+
+```bash
+codex mcp add data-factory -- python3 /path/to/data-factory/factory.py mcp
+```
+
+```bash
+gemini mcp add -s user data-factory python3 /path/to/data-factory/factory.py mcp
+```
+
+For clients configured with JSON (Claude desktop's `claude_desktop_config.json`, Cursor, and others):
 
 ```json
 { "mcpServers": { "data-factory": { "command": "python3", "args": ["/path/to/data-factory/factory.py", "mcp"] } } }
 ```
 
-The first tool call in each agent session opens the factory page (`~/.data-factory/index.html`) in your browser: a 3D factory floor you can drag to turn, with one machine per agent, conveyor belts carrying conversations in and crates of training pairs coming out, plus tables of totals and your latest sessions. Under the floor it lists what your data can train (search, a test set, a prompt router, report writing, summaries, a Thai assistant, OCR, speech), how many examples you have for each, and which open model to start from. Every later call refreshes it, and the open tab reloads itself. It is a local file; nothing is served or uploaded.
+</details>
+
+**Why is it not under Connectors in Claude?** Connectors are remote servers on the internet that Claude's cloud calls. The factory is a local program that reads files on your own disk, which is the point: your conversations never leave your machine. Turning it into a Connector would mean publishing your store at a public address.
 
 ### Ask your agent
 

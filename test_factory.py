@@ -130,4 +130,29 @@ prof = json.loads((f.STORE / "profile.json").read_text())
 assert (prof["ocr_pairs"], prof["ocr_test"]) == (2, 1), prof
 assert "2 of 2,000 examples" in (f.STORE / "index.html").read_text()
 
+# install: registers with the CLIs it finds, merges into the desktop config without losing other servers
+fake = tmp / "fakehome"
+bindir = tmp / "bin"
+bindir.mkdir()
+for exe in ("claude", "codex"):  # no gemini: must be reported as not installed
+    (bindir / exe).write_text('#!/bin/sh\necho "$(basename "$0") $@" >> "$HOME/calls.log"\n')
+    (bindir / exe).chmod(0o755)
+desk = [fake / "Library/Application Support/Claude", fake / ".config/Claude"]
+for d in desk:
+    d.mkdir(parents=True)
+    (d / "claude_desktop_config.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}, "preferences": {"a": 1}}))
+env = {"HOME": str(fake), "PATH": f"{bindir}:/usr/bin:/bin", "APPDATA": str(fake / ".config")}
+script = str(Path(f.__file__).resolve())
+out = subprocess.run([sys.executable, script, "install"], capture_output=True, text=True, env=env, check=True).stdout
+calls = (fake / "calls.log").read_text()
+assert "claude mcp add --scope user data-factory --" in calls and "codex mcp add data-factory --" in calls, calls
+assert calls.count(script + " mcp") == 2 and "Gemini CLI      not installed" in out, out
+cfg = next(d for d in desk if (d / "claude_desktop_config.json.bak").exists()) / "claude_desktop_config.json"
+merged = json.loads(cfg.read_text())
+assert set(merged["mcpServers"]) == {"other", "data-factory"} and merged["preferences"] == {"a": 1}, merged
+assert merged["mcpServers"]["data-factory"]["args"] == [script, "mcp"]
+cfg.write_text("{ broken")  # an unreadable config must be left alone
+out = subprocess.run([sys.executable, script, "install", "desktop"], capture_output=True, text=True, env=env, check=True).stdout
+assert "config left untouched" in out and cfg.read_text() == "{ broken" and "Codex" not in out, out
+
 print("ok")

@@ -8,10 +8,11 @@
   factory.py search QUERY       find past questions and results
   factory.py show               open the factory page (a local HTML view of the store)
   factory.py mcp                run as an MCP server (factory_log, factory_search, factory_show)
+  factory.py install [NAME]     connect that MCP server to Claude Code, Codex, Gemini CLI, Claude desktop
 
 Store: ~/.data-factory (override with DATA_FACTORY_HOME). Stdlib only.
 """
-import argparse, html, json, math, os, re, sys, webbrowser, zipfile
+import argparse, html, json, math, os, re, shutil, subprocess, sys, webbrowser, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -681,6 +682,49 @@ def mcp():
         print(json.dumps(reply), file=out, flush=True)
 
 
+def install(only=()):
+    """Connect this MCP server to every AI client found on this machine (or only those named)."""
+    py, me, tag = sys.executable or "python3", str(Path(__file__).resolve()), "data-factory"
+    clis = {  # client -> (program, remove an older entry, add)
+        "Claude Code": ("claude", ["mcp", "remove", tag, "-s", "user"], ["mcp", "add", "--scope", "user", tag, "--", py, me, "mcp"]),
+        "Codex": ("codex", ["mcp", "remove", tag], ["mcp", "add", tag, "--", py, me, "mcp"]),
+        "Gemini CLI": ("gemini", ["mcp", "remove", "-s", "user", tag], ["mcp", "add", "-s", "user", tag, py, me, "mcp"]),
+    }
+    wanted = lambda name: not only or any(o.lower() in name.lower() for o in only)
+    for name, (exe, remove, add) in clis.items():
+        if not wanted(name):
+            continue
+        path = shutil.which(exe)
+        if not path:
+            print(f"{name:15} not installed, skipped")
+            continue
+        try:
+            subprocess.run([path, *remove], capture_output=True, timeout=120)
+            r = subprocess.run([path, *add], capture_output=True, text=True, timeout=120)
+            why = (r.stderr or r.stdout).strip().splitlines()[-1:] or ["no output"]
+            print(f"{name:15} " + ("connected. Start a new session to use it." if r.returncode == 0 else f"failed: {why[0]}"))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"{name:15} failed: {e}")
+    name = "Claude desktop"
+    if wanted(name):
+        base = {"darwin": Path.home() / "Library/Application Support", "win32": Path(os.environ.get("APPDATA") or Path.home())}
+        cfg = base.get(sys.platform, Path.home() / ".config") / "Claude" / "claude_desktop_config.json"
+        if not cfg.parent.is_dir():
+            print(f"{name:15} not installed, skipped")
+            return
+        try:  # merge into the app's config; never overwrite a file we cannot parse
+            data = json.loads(cfg.read_text()) if cfg.exists() else {}
+            data.setdefault("mcpServers", {})[tag] = {"command": py, "args": [me, "mcp"]}
+            if cfg.exists():
+                shutil.copy2(cfg, cfg.with_name(cfg.name + ".bak"))
+            tmp = cfg.with_name(cfg.name + ".tmp")
+            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            os.replace(tmp, cfg)
+            print(f"{name:15} connected. Quit and reopen the app to load it. (previous config saved as {cfg.name}.bak)")
+        except (ValueError, AttributeError, TypeError, OSError) as e:
+            print(f"{name:15} skipped, config left untouched: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -692,6 +736,7 @@ def main():
     s.add_argument("query")
     s.add_argument("-n", "--limit", type=int, default=20)
     sub.add_parser("show")
+    sub.add_parser("install").add_argument("only", nargs="*", metavar="NAME", help="e.g. claude, codex, gemini")
     sub.add_parser("mcp")
     a = ap.parse_args()
     if a.cmd == "collect":
@@ -704,6 +749,8 @@ def main():
         export()
     elif a.cmd == "search":
         print("\n".join(search(a.query, a.limit)) or "no matches")
+    elif a.cmd == "install":
+        install(a.only)
     elif a.cmd == "show":
         print(show())
     elif a.cmd == "mcp":
