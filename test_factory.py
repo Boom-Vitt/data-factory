@@ -161,6 +161,35 @@ briefs = list(f.lines(f.STORE / "train_briefs.jsonl"))
 assert [(x["kind"], x["messages"][0]["content"]) for x in train] == [("asked", LONG)], train
 assert [x["kind"] for x in briefs] == ["brief"] and briefs[0]["source"] == "claude-code", briefs
 
+# labelling: a dry run sends nothing; --yes sends, keeps only well-formed labels, and they reach train.jsonl
+LONG2 = "write a short note to the night shift about the broken sorter on line four and what to check"
+f.save("codex", "typed3", turn(LONG2))
+f.export()
+fake, sent = tmp / "fake_labeller.py", tmp / "sent.txt"
+fake.write_text("""import json, pathlib, sys
+text = sys.stdin.read()
+pathlib.Path(sys.argv[1]).write_text(text, encoding="utf-8")
+rows = [{"n": 1, "task": "explaining", "difficulty": "easy", "language": "english", "quality": "good"},
+        {"n": 2, "task": "world domination", "difficulty": "easy", "language": "english", "quality": "good"},
+        {"n": 99, "task": "coding", "difficulty": "easy", "language": "english", "quality": "good"}]
+print("Sure, here are the labels:\\n" + json.dumps(rows[: text.count("### Example ") + 1]) + "\\nDone.")
+""", encoding="utf-8")
+agent = [sys.executable, str(fake), str(sent)]
+f.label(command=agent)
+assert not sent.exists() and not (f.STORE / "labels.jsonl").exists(), "without yes, nothing is sent or written"
+f.label(command=agent, yes=True)
+asked = sent.read_text(encoding="utf-8")
+assert LONG in asked and LONG2 in asked and "### Example 2" in asked and "an answer" in asked
+by_prompt = {x["messages"][0]["content"]: x.get("labels") for x in f.lines(f.STORE / "train.jsonl")}
+assert by_prompt == {LONG: {"task": "explaining", "difficulty": "easy", "language": "english", "quality": "good"},
+                     LONG2: None}, by_prompt
+f.label(command=agent, yes=True)  # a second run sends only what is still unlabelled
+asked = sent.read_text(encoding="utf-8")
+assert LONG2 in asked and LONG not in asked and "### Example 2" not in asked
+sent.unlink()
+f.label(command=agent, yes=True, limit=0)
+assert not sent.exists() and f.parse_labels("no json here", 3) == {} and f.parse_labels("[1, 2", 3) == {}
+
 # exclude: removes what is stored from that folder, blocks re-collection, leaves a sibling folder alone
 app, sibling = tmp / "work" / "app", tmp / "work" / "app2"
 secret_pic, shared_pic = (("image/png", base64.b64encode(b).decode()) for b in (b"client diagram", b"pasted png"))

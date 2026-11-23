@@ -11,7 +11,7 @@ You talk to Claude Code, Codex, Gemini, Antigravity, ChatGPT, Grok and a dozen o
 `data-factory` pulls all of it into one plain JSONL store on your own disk: searchable today, ready to fine-tune your own local model tomorrow.
 
 - **One file, zero dependencies.** `factory.py` is plain Python standard library (3.9 or newer) and runs on macOS, Linux and Windows.
-- **Nothing leaves your machine.** No account, no server, no telemetry.
+- **Nothing leaves your machine** unless you ask for it. No account, no server, no telemetry. The one exception is the optional `label --yes` command below.
 - **You choose what is collected.** Name a folder and it is never read again.
 - **No hooks to install.** It reads the transcripts your agents already write.
 - **One MCP server**, connected to all your agents with one command.
@@ -59,6 +59,27 @@ This deletes the conversations already stored from that folder (and everything i
 It works for agents that record which folder a conversation happened in: Claude Code and Codex. Gemini CLI, Antigravity, web exports and `factory_log` entries carry no folder, so they cannot be excluded this way.
 
 To stop the factory page opening in your browser, set `DATA_FACTORY_NO_OPEN=1` for the MCP server.
+
+### Label your requests with an AI agent (optional)
+
+Keyword rules can tell a request you typed from machine chatter, but not what the request was for or whether the answer was any good. An AI agent can. This is the only command that sends your text anywhere, so it is off unless you say otherwise:
+
+```bash
+python3 data-factory/factory.py label
+```
+
+```text
+0 of 1,222 typed requests are labelled; 1,222 are not.
+This run would send 50 requests and the end of their answers (about 25,634 tokens of your text) to claude in 5 calls. Excluded folders are never in this set.
+Nothing was sent. Add --yes to send, --limit N to change how many.
+```
+
+Add `--yes` to send that batch. Each request gets a task, a difficulty, a language and a verdict on its answer (good, bad or unsure), saved in `~/.data-factory/labels.jsonl` and copied onto the matching lines of `train.jsonl` as `"labels"`. Later runs only send what is still unlabelled.
+
+- It uses the agent CLI you already have and are signed in to: `claude`, `codex` or `gemini` (pick one with `--with`). The usage counts against that account.
+- `--limit N` caps one run; the default is 50 requests.
+- `--command your-program args` uses any program that reads the instructions on standard input and prints a reply, for example a model running on your own machine.
+- Only the first 1,200 characters of each request and the last 1,200 of its answer are sent. Secrets were already replaced on the way in, with the limits described under Privacy.
 
 ### Connect your agents
 
@@ -185,6 +206,7 @@ Your conversations contain your code, your clients and your keys. So:
 - The store lives **outside** this repository and is never committed.
 - Common secret shapes (API keys, tokens, JWTs, private keys) are replaced with `[REDACTED]` on the way in. This is a safety net, not a guarantee: run a real scanner before you share or train on the data.
 - Pasted images and files are stored exactly as they were. Nothing inside a picture is redacted, so a screenshot of a password stays a screenshot of a password.
+- `label --yes` sends requests and answers to the AI provider behind the agent you choose. Nothing else in this tool sends anything.
 - Only collect conversations you have the right to keep, and `exclude` the folders you should not.
 - Some AI providers restrict using their models' output to train other models. Check the terms of the services you use before you train on this data.
 
