@@ -1,4 +1,5 @@
-"""Run: python3 test_factory.py  (uses a temp store and a fake home; touches nothing real)"""
+"""Run: python test_factory.py  (uses a temp store and a fake home; touches nothing real).
+Runs in CI on Linux, macOS and Windows."""
 import json, os, subprocess, sys, tempfile, zipfile
 from pathlib import Path
 
@@ -12,7 +13,7 @@ KEY = "sk-" + "a" * 30
 
 def write(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n", encoding="utf-8")
 
 
 home = tmp / "home"
@@ -67,7 +68,7 @@ f.import_export(z)
 assert [(r["role"], r["text"]) for r in read("chatgpt/c1.jsonl")] == [("user", "Q"), ("assistant", "A")]
 j = tmp / "conversations.json"
 j.write_text(json.dumps([{"uuid": "u1", "chat_messages": [
-    {"sender": "human", "text": "cq"}, {"sender": "assistant", "text": "ca"}]}]))
+    {"sender": "human", "text": "cq"}, {"sender": "assistant", "text": "ca"}]}]), encoding="utf-8")
 f.import_export(j)
 assert [(r["role"], r["text"]) for r in read("claude-chat/u1.jsonl")] == [("user", "cq"), ("assistant", "ca")]
 
@@ -76,7 +77,7 @@ assert list(f.pairs([{"role": "user", "text": "lost"}, {"role": "user", "text": 
                      {"role": "assistant", "text": "a1"}, {"role": "assistant", "text": "a2"},
                      {"role": "user", "text": "unanswered"}])) == [("q", "a1\n\na2")]
 f.export()
-assert sum(1 for _ in f.lines(f.STORE / "train.jsonl")) == 6
+assert not list(f.lines(f.STORE / "train.jsonl")), "every prompt so far is a short steer, which is not training data"
 
 # MCP round trip, including a hostile source name and a secret
 reqs = [
@@ -98,19 +99,50 @@ assert {t["name"] for t in r[2]["result"]["tools"]} == {"factory_log", "factory_
 assert "needle question" in r[4]["result"]["content"][0]["text"]
 assert r[5]["error"]["code"] == -32602 and r[6]["error"]["code"] == -32601
 logged = list((f.SESSIONS / "grok").glob("mcp-*.jsonl"))
-assert len(logged) == 1 and KEY not in logged[0].read_text(), "source must stay inside the store, secrets redacted"
+assert len(logged) == 1 and KEY not in logged[0].read_text(encoding="utf-8"), "source must stay inside the store, secrets redacted"
 assert not [p for p in tmp.rglob("*.jsonl") if f.STORE not in p.parents and home not in p.parents]
 
 # the factory page: rebuilt by collect and by every tool call, prompt text escaped
-page = (f.STORE / "index.html").read_text()
+page = (f.STORE / "index.html").read_text(encoding="utf-8")
 assert "index.html" in r[7]["result"]["content"][0]["text"]
 assert "Claude Code" in page and "Grok" in page and "__" not in page
 assert "&lt;script&gt;alert(1)" in page and "<script>alert" not in page
 assert page.count('class="rec ') == 9 and "Gemma 4" in page and "Claude Code" in page
-prof = json.loads((f.STORE / "profile.json").read_text())
+prof = json.loads((f.STORE / "profile.json").read_text(encoding="utf-8"))
 assert prof["asked"] == 0 and prof["steer"] >= 4, prof  # every fixture prompt is a short one
 assert "import export.zip" not in page and "factory_log" not in page, "tips only for agents not yet collected"
 assert page.count('class="rider"') == 3 * 7 + 3, "three crates per agent belt plus the outbound belt"
+
+# export: requests you typed go to train.jsonl, agent briefs to their own file; noise and duplicates are dropped
+LONG = "please explain in detail how the conveyor belt scheduler decides which crate goes first"
+
+
+def turn(prompt, cwd=None):
+    return [("user", prompt, None, None, cwd), ("assistant", "an answer", None, None, cwd)]
+
+
+f.save("codex", "typed", turn(LONG) + turn("done?")
+       + turn("This session is being continued from a previous conversation that ran out of context. Summary follows.")
+       + turn("Another Claude session sent a message: <teammate-message> idle notification from a worker </teammate-message>"))
+f.save("codex", "typed2", turn(LONG.upper() + "  "))  # the same request again: a duplicate
+f.save("claude-code", "agent-7", turn("Investigate the failing importer and report every root cause you can confirm"))
+f.export()
+train = list(f.lines(f.STORE / "train.jsonl"))
+briefs = list(f.lines(f.STORE / "train_briefs.jsonl"))
+assert [(x["kind"], x["messages"][0]["content"]) for x in train] == [("asked", LONG)], train
+assert [x["kind"] for x in briefs] == ["brief"] and briefs[0]["source"] == "claude-code", briefs
+
+# exclude: removes what is stored from that folder, blocks re-collection, leaves a sibling folder alone
+app, sibling = tmp / "work" / "app", tmp / "work" / "app2"
+f.save("codex", "inside", turn("q", str(app / "sub")))
+f.save("codex", "sibling", turn("q", str(sibling)))
+f.exclude(str(app))
+assert not (f.SESSIONS / "codex/inside.jsonl").exists() and (f.SESSIONS / "codex/sibling.jsonl").exists()
+assert f.save("codex", "inside", turn("q", str(app / "sub"))) == 0 and not (f.SESSIONS / "codex/inside.jsonl").exists()
+assert f.save("codex", "inside", turn("q", str(app.resolve() / "x"))) == 0, "the resolved form of the folder is excluded too"
+assert f.save("codex", "nofolder", turn("q")) == 2, "records without a folder are never excluded"
+f.exclude(str(app), remove=True)
+assert f.excluded() == [] and f.save("codex", "inside", turn("q", str(app / "sub"))) == 2
 
 # OCR pairs: indexed by path, test beats train on overlap, missing images and prediction files ignored
 ds = tmp / "ocrset"
@@ -126,33 +158,40 @@ write(ds / "raw/dump.jsonl", [{"image": "z.jpg", "text": "z"}])
 f.add_ocr(ds)
 got = {Path(r["image"]).name: r["split"] for r in f.lines(f.STORE / "ocr/ocrset.jsonl")}
 assert got == {"a.jpg": "train", "b.jpg": "test", "c.jpg": "val"}, got
-prof = json.loads((f.STORE / "profile.json").read_text())
+prof = json.loads((f.STORE / "profile.json").read_text(encoding="utf-8"))
 assert (prof["ocr_pairs"], prof["ocr_test"]) == (2, 1), prof
-assert "2 of 2,000 examples" in (f.STORE / "index.html").read_text()
+assert "2 of 2,000 examples" in (f.STORE / "index.html").read_text(encoding="utf-8")
 
 # install: registers with the CLIs it finds, merges into the desktop config without losing other servers
 fake = tmp / "fakehome"
 bindir = tmp / "bin"
 bindir.mkdir()
 for exe in ("claude", "codex"):  # no gemini: must be reported as not installed
-    (bindir / exe).write_text('#!/bin/sh\necho "$(basename "$0") $@" >> "$HOME/calls.log"\n')
-    (bindir / exe).chmod(0o755)
+    if os.name == "nt":
+        (bindir / f"{exe}.cmd").write_text('@echo %~n0 %*>> "%USERPROFILE%\\calls.log"\r\n', encoding="utf-8")
+    else:
+        (bindir / exe).write_text('#!/bin/sh\necho "$(basename "$0") $@" >> "$HOME/calls.log"\n', encoding="utf-8")
+        (bindir / exe).chmod(0o755)
 desk = [fake / "Library/Application Support/Claude", fake / ".config/Claude"]
 for d in desk:
     d.mkdir(parents=True)
-    (d / "claude_desktop_config.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}, "preferences": {"a": 1}}))
-env = {"HOME": str(fake), "PATH": f"{bindir}:/usr/bin:/bin", "APPDATA": str(fake / ".config")}
+    (d / "claude_desktop_config.json").write_text(
+        json.dumps({"mcpServers": {"other": {"command": "x"}}, "preferences": {"a": 1}}), encoding="utf-8")
+# a bare environment: the real claude/codex/gemini on this machine must not be reachable
+system = [os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")] if os.name == "nt" else ["/usr/bin", "/bin"]
+env = {k: v for k, v in os.environ.items() if k.upper() in ("SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP")}
+env.update(HOME=str(fake), USERPROFILE=str(fake), APPDATA=str(fake / ".config"), PATH=os.pathsep.join([str(bindir), *system]))
 script = str(Path(f.__file__).resolve())
 out = subprocess.run([sys.executable, script, "install"], capture_output=True, text=True, env=env, check=True).stdout
-calls = (fake / "calls.log").read_text()
+calls = (fake / "calls.log").read_text(encoding="utf-8")
 assert "claude mcp add --scope user data-factory --" in calls and "codex mcp add data-factory --" in calls, calls
 assert calls.count(script + " mcp") == 2 and "Gemini CLI      not installed" in out, out
 cfg = next(d for d in desk if (d / "claude_desktop_config.json.bak").exists()) / "claude_desktop_config.json"
-merged = json.loads(cfg.read_text())
+merged = json.loads(cfg.read_text(encoding="utf-8"))
 assert set(merged["mcpServers"]) == {"other", "data-factory"} and merged["preferences"] == {"a": 1}, merged
 assert merged["mcpServers"]["data-factory"]["args"] == [script, "mcp"]
-cfg.write_text("{ broken")  # an unreadable config must be left alone
+cfg.write_text("{ broken", encoding="utf-8")  # an unreadable config must be left alone
 out = subprocess.run([sys.executable, script, "install", "desktop"], capture_output=True, text=True, env=env, check=True).stdout
-assert "config left untouched" in out and cfg.read_text() == "{ broken" and "Codex" not in out, out
+assert "config left untouched" in out and cfg.read_text(encoding="utf-8") == "{ broken" and "Codex" not in out, out
 
 print("ok")
