@@ -3,6 +3,7 @@
 
   factory.py collect            sweep local agent transcripts into the store
   factory.py import FILE        add a ChatGPT / Claude.ai export (.zip or conversations.json)
+  factory.py ocr DIR            index image + correct-text pairs found in DIR (for OCR training)
   factory.py export             write train.jsonl (prompt -> answer pairs, chat format)
   factory.py search QUERY       find past questions and results
   factory.py show               open the factory page (a local HTML view of the store)
@@ -247,6 +248,50 @@ def log(source, prompt, response, model=None):
     return f"saved to {out}"
 
 
+# --- OCR pairs ----------------------------------------------------------------
+
+SPLITS = ("train", "val", "test")
+
+
+def add_ocr(folder):
+    """Index every {"image": ..., "text": ...} record in the JSONL manifests under `folder`."""
+    # ponytail: stores the path to each image, not a copy (datasets run to tens of GB).
+    # Re-run after moving the folder. Split is guessed from the manifest path; test wins on overlap.
+    root = Path(folder).expanduser().resolve()
+    if not root.is_dir():
+        sys.exit(f"not a folder: {root}")
+    found, missing = {}, 0
+    for man in sorted(root.rglob("*.jsonl")):
+        rel = man.relative_to(root)
+        if any(part.startswith(".") or part in ("node_modules", "raw") for part in rel.parts) or man.stem.endswith("_raw"):
+            continue  # hidden folders, dependencies, untouched downloads and pre-cleanup manifests
+        where = str(rel).lower()
+        split = "test" if "test" in where else "val" if "val" in where else "train"
+        for r in lines(man):
+            img, text = r.get("image"), r.get("text")
+            if not (isinstance(img, str) and isinstance(text, str) and text.strip()):
+                continue
+            path = next((p for p in (Path(img), root / img, man.parent / img) if p.is_file()), None)
+            if path is None:
+                missing += 1
+                continue
+            key = str(path.resolve())
+            if key not in found or SPLITS.index(split) > SPLITS.index(found[key]["split"]):
+                found[key] = {"image": key, "text": text, "source": str(r.get("source") or rel.parent), "split": split}
+    if not found:
+        sys.exit(f"no image + text pairs found under {root} ({missing} records pointed at missing images)")
+    out = STORE / "ocr" / f"{clean_name(root.name)}.jsonl"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in found.values()))
+    os.replace(tmp, out)
+    n = {k: sum(r["split"] == k for r in found.values()) for k in SPLITS}
+    print(f"{len(found):,} image + text pairs -> {out}")
+    print(f"  train {n['train']:,}   val {n['val']:,}   test {n['test']:,} (never train on test)   missing images skipped: {missing:,}")
+    profile()
+    dashboard()
+
+
 # --- the factory page ---------------------------------------------------------
 
 PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
@@ -319,7 +364,7 @@ th{font-size:14px;color:var(--dim);font-weight:500;border-top:2px solid var(--in
 .q{overflow-wrap:anywhere}footer{color:var(--dim);font-size:14px;margin-top:36px}
 @media(max-width:720px){.rec{grid-template-columns:1fr}h1{font-size:36px}}
 </style><main><h1>data-factory</h1>
-<p class="sub">Your factory holds __SESSIONS__ conversations (__MESSAGES__ messages) from __NSOURCES__, and has packed __PAIRS__ question-and-answer pairs for training.</p>
+<p class="sub">Your factory holds __SESSIONS__ conversations (__MESSAGES__ messages) from __NSOURCES__, and has packed __PAIRS__ question-and-answer pairs for training.__OCRLINE__</p>
 <p class="note">Updated __NOW__. Everything on this page stays on your computer.</p>
 <div class="stage" role="img" aria-label="3D factory floor: each AI agent is a machine sending crates of conversations into the factory, which ships training pairs. The same numbers are in the tables below."><div class="world"><div class="ground"></div>__SCENE__</div></div>
 <div class="ctl"><span>Each machine is one AI agent: taller means more messages, a faster belt means a busier agent. Drag the floor to look around.</span>
@@ -419,7 +464,10 @@ THAI = re.compile(r"[฀-๿]")
 
 def profile():
     """Count what kinds of question-and-answer examples the store holds, for the training advice."""
-    c = dict.fromkeys(("asked", "thai", "steer", "brief", "review", "summary", "ocr"), 0)
+    c = dict.fromkeys(("asked", "thai", "steer", "brief", "review", "summary", "ocr", "ocr_pairs", "ocr_test"), 0)
+    for p in (STORE / "ocr").glob("*.jsonl"):
+        for r in lines(p):
+            c["ocr_test" if r.get("split") == "test" else "ocr_pairs"] += 1
     for p in SESSIONS.glob("*/*.jsonl"):
         worker = p.name.startswith("agent-")  # a Claude Code subagent: its prompt was written by another AI
         for prompt, _ in pairs(lines(p)):
@@ -469,8 +517,10 @@ def recommendations(c, messages):
          c["thai"], 3000, None, "Start from Qwen3.5-9B or Gemma 4 12B with LoRA",
          "Keep collecting, and import your ChatGPT and Gemini history."),
         ("Read Thai text from images (OCR)", f"A small vision model that replaces paid OCR calls. The factory saw {c['ocr']:,} of them.",
-         0, 2000, "missing", "Start from Typhoon OCR 1.5 (2B, built for Thai). Smaller: PaddleOCR-VL-1.6 (0.9B) or Nemotron 3.5 Parse (0.6B); test their Thai first",
-         "The factory stores text only. Add the images together with their correct text."),
+         c.get("ocr_pairs", 0), 2000, None if c.get("ocr_pairs") else "missing",
+         "Start from Typhoon OCR2 (2B) or dots.mocr with LoRA. Smaller: PaddleOCR-VL-1.6 (0.9B) or Nemotron 3.5 Parse (0.6B); test their Thai first",
+         f"{c.get('ocr_test', 0):,} more pairs are held out as a test set. Never train on those." if c.get("ocr_pairs")
+         else "Index a folder of images and their correct text: factory.py ocr FOLDER"),
         ("Thai speech to text", "Transcribe Thai speech and dialects without a paid service.",
          0, 0, "missing", "Start from Typhoon ASR Real-time (115M) or Typhoon Whisper Turbo; Typhoon Isan for the Isan dialect", "Add audio clips together with their correct transcripts."),
         ("Replace your coding agent", "A local model that edits code and runs tools the way Claude Code or Codex does.",
@@ -542,6 +592,7 @@ def dashboard():
         "__NSOURCES__": f"{len(per)} AI agent" + "s" * (len(per) != 1), "__STORE__": e(str(STORE)),
         "__SCENE__": floor, "__GW__": str(gw), "__GD__": str(gd),
         "__SH__": f"{(gw + gd) * .36 + 140:.0f}", "__FIT__": f"{(gw + gd) * .72:.0f}",
+        "__OCRLINE__": f" It also indexes {counts['ocr_pairs']:,} images with their correct text for OCR training." if counts.get("ocr_pairs") else "",
         "__RECS__": recommendations(counts, total), "__MORE__": more_sources(per),
         "__SOURCES__": sources or '<tr><td colspan="4">Nothing collected yet. Run: factory.py collect</td></tr>',
         "__RECENT__": recent or '<tr><td colspan="3">No conversations yet.</td></tr>',
@@ -635,6 +686,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("collect")
     sub.add_parser("import").add_argument("file")
+    sub.add_parser("ocr").add_argument("folder")
     sub.add_parser("export")
     s = sub.add_parser("search")
     s.add_argument("query")
@@ -646,6 +698,8 @@ def main():
         collect()
     elif a.cmd == "import":
         import_export(a.file)
+    elif a.cmd == "ocr":
+        add_ocr(a.folder)
     elif a.cmd == "export":
         export()
     elif a.cmd == "search":

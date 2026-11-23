@@ -74,8 +74,14 @@ python3 factory.py import ~/Downloads/chatgpt-export.zip
 ```
 
 ```bash
+python3 factory.py ocr ~/my-ocr-dataset
+```
+
+```bash
 python3 factory.py export
 ```
+
+`ocr` indexes every `{"image": ..., "text": ...}` record in the JSONL manifests under a folder, as image + correct-text pairs for training an OCR model. It records where each image is rather than copying it, and keeps anything under a `test` path apart as a held-out test set.
 
 `export` writes `train.jsonl`: one prompt and its full answer per line, in the chat `messages` format that fine-tuning tools (MLX, Unsloth, Axolotl, llama.cpp) accept.
 

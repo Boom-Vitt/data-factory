@@ -112,4 +112,22 @@ assert prof["asked"] == 0 and prof["steer"] >= 4, prof  # every fixture prompt i
 assert "import export.zip" not in page and "factory_log" not in page, "tips only for agents not yet collected"
 assert page.count('class="rider"') == 3 * 7 + 3, "three crates per agent belt plus the outbound belt"
 
+# OCR pairs: indexed by path, test beats train on overlap, missing images and prediction files ignored
+ds = tmp / "ocrset"
+for name in ("a.jpg", "b.jpg", "sub/c.jpg", "raw/z.jpg"):
+    (ds / name).parent.mkdir(parents=True, exist_ok=True)
+    (ds / name).write_bytes(b"img")
+write(ds / "train_manifest.jsonl", [{"image": "a.jpg", "text": "ก"}, {"image": str(ds / "b.jpg"), "text": "ข", "source": "s"},
+                                    {"image": "gone.jpg", "text": "x"}, {"image": "a.jpg", "text": ""}])
+write(ds / "eval/test_set/manifest.jsonl", [{"image": "../../b.jpg", "text": "ข"}])
+write(ds / "sub/val.jsonl", [{"image": "c.jpg", "text": "ค"}])
+write(ds / "preds/model.jsonl", [{"id": 1, "pred": "x"}])
+write(ds / "raw/dump.jsonl", [{"image": "z.jpg", "text": "z"}])
+f.add_ocr(ds)
+got = {Path(r["image"]).name: r["split"] for r in f.lines(f.STORE / "ocr/ocrset.jsonl")}
+assert got == {"a.jpg": "train", "b.jpg": "test", "c.jpg": "val"}, got
+prof = json.loads((f.STORE / "profile.json").read_text())
+assert (prof["ocr_pairs"], prof["ocr_test"]) == (2, 1), prof
+assert "2 of 2,000 examples" in (f.STORE / "index.html").read_text()
+
 print("ok")
