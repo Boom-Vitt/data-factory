@@ -5,11 +5,12 @@
   factory.py import FILE        add a ChatGPT / Claude.ai export (.zip or conversations.json)
   factory.py export             write train.jsonl (prompt -> answer pairs, chat format)
   factory.py search QUERY       find past questions and results
-  factory.py mcp                run as an MCP server (tools: factory_log, factory_search)
+  factory.py show               open the factory page (a local HTML view of the store)
+  factory.py mcp                run as an MCP server (factory_log, factory_search, factory_show)
 
 Store: ~/.data-factory (override with DATA_FACTORY_HOME). Stdlib only.
 """
-import argparse, json, os, re, sys, zipfile
+import argparse, html, json, os, re, sys, webbrowser, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -132,15 +133,19 @@ def collect(home=None):
             seen += 1
             out = SESSIONS / source / f"{clean_name(sid(src))}.jsonl"
             try:
-                if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+                mtime = src.stat().st_mtime_ns
+                if out.exists() and out.stat().st_mtime_ns >= mtime:
                     continue
                 n = save(source, sid(src), parser(src))
+                if n:  # keep the transcript's own time: "latest sessions" then means last activity
+                    os.utime(out, ns=(mtime, mtime))
             except OSError as e:
                 print(f"  skip {src}: {e}", file=sys.stderr)
                 continue
             updated += bool(n)
             msgs += n
         print(f"{source:12} {seen:6} sessions found, {updated:6} updated, {msgs:8} messages written")
+    dashboard()
 
 
 # --- web exports --------------------------------------------------------------
@@ -241,6 +246,79 @@ def log(source, prompt, response, model=None):
     return f"saved to {out}"
 
 
+# --- the factory page ---------------------------------------------------------
+
+PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="20">
+<title>data-factory</title><style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#1c1b19;--dim:#6f6b63;--line:#e4e1d9;--acc:#c2410c}
+@media(prefers-color-scheme:dark){:root{--bg:#141412;--card:#1e1d1a;--ink:#edeae3;--dim:#9a958a;--line:#2e2c27;--acc:#fb923c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Sukhumvit Set",Thonburi,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 16px 48px}h1{font-size:22px;margin:0}h1 b{color:var(--acc)}
+.sub{color:var(--dim);margin:2px 0 24px;font-size:13px}h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:28px 0 8px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.tile,.box{background:var(--card);border:1px solid var(--line);border-radius:10px}.tile{padding:14px 16px}
+.tile b{display:block;font-size:26px;font-variant-numeric:tabular-nums}.tile span{color:var(--dim);font-size:13px}
+.box{overflow-x:auto}table{border-collapse:collapse;width:100%}td,th{padding:8px 14px;text-align:left;border-top:1px solid var(--line);vertical-align:top}
+tr:first-child>*{border-top:0}th{font-size:12px;color:var(--dim);font-weight:500}.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.t,.a{white-space:nowrap}.t{color:var(--dim);font-variant-numeric:tabular-nums}.bar{width:40%;min-width:90px}.bar i{display:block;height:8px;margin-top:8px;border-radius:4px;background:var(--acc)}
+.q{overflow-wrap:anywhere}footer{color:var(--dim);font-size:12px;margin-top:24px}
+</style><main><h1><b>data</b>-factory</h1>
+<p class="sub">Every AI conversation on this machine. Updated __NOW__. This page is a local file; nothing is uploaded.</p>
+<div class="tiles"><div class="tile"><b>__SESSIONS__</b><span>sessions</span></div><div class="tile"><b>__MESSAGES__</b><span>messages</span></div>
+<div class="tile"><b>__PAIRS__</b><span>training pairs</span></div><div class="tile"><b>__NSOURCES__</b><span>agents</span></div></div>
+<h2>By agent</h2><div class="box"><table><tr><th>Agent</th><th class="n">Sessions</th><th class="n">Messages</th><th></th></tr>__SOURCES__</table></div>
+<h2>Latest sessions</h2><div class="box"><table><tr><th>Last activity</th><th>Agent</th><th>First prompt</th></tr>__RECENT__</table></div>
+<footer>Store: __STORE__</footer></main></html>"""
+
+
+def dashboard():
+    """Rebuild the one-page HTML view of the store. Returns its path."""
+    # ponytail: rescans every session file on each rebuild (fine at ~100 MB). Cache counts if it grows to GBs.
+    e = html.escape
+    files = sorted(SESSIONS.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    per = {}  # agent -> [sessions, messages]
+    for p in files:
+        s = per.setdefault(p.parent.name, [0, 0])
+        s[0] += 1
+        s[1] += p.read_bytes().count(b"\n")
+    top = max((m for _, m in per.values()), default=0) or 1
+    sources = "".join(
+        f'<tr><td class="a">{e(k)}</td><td class="n">{s:,}</td><td class="n">{m:,}</td>'
+        f'<td class="bar"><i style="width:{100 * m / top:.1f}%"></i></td></tr>'
+        for k, (s, m) in sorted(per.items(), key=lambda kv: -kv[1][1]))
+    recent = ""
+    for p in files[:25]:
+        first = next((r for r in lines(p) if r.get("role") == "user"), {})
+        snippet = " ".join(str(first.get("text") or "(no prompt)").split())[:160]
+        when = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        recent += f'<tr><td class="t">{when}</td><td class="a">{e(p.parent.name)}</td><td class="q">{e(snippet)}</td></tr>'
+    train = STORE / "train.jsonl"
+    pairs_n = train.read_bytes().count(b"\n") if train.exists() else 0
+    fill = {
+        "__NOW__": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "__SESSIONS__": f"{len(files):,}", "__MESSAGES__": f"{sum(m for _, m in per.values()):,}",
+        "__PAIRS__": f"{pairs_n:,}",
+        "__NSOURCES__": str(len(per)), "__STORE__": e(str(STORE)),
+        "__SOURCES__": sources or '<tr><td colspan="4">Nothing collected yet. Run: factory.py collect</td></tr>',
+        "__RECENT__": recent or '<tr><td colspan="3">No sessions yet.</td></tr>',
+    }
+    page = re.sub("|".join(fill), lambda m: fill[m.group()], PAGE)
+    STORE.mkdir(parents=True, exist_ok=True)
+    out = STORE / "index.html"
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(page)
+    os.replace(tmp, out)
+    return out
+
+
+def show(open_browser=True):
+    page = dashboard()
+    if open_browser and not os.environ.get("DATA_FACTORY_NO_OPEN"):
+        webbrowser.open(page.as_uri())
+    return f"factory page: {page}"
+
+
 # --- MCP server (stdio, newline-delimited JSON-RPC) ---------------------------
 
 TOOLS = [
@@ -255,7 +333,11 @@ TOOLS = [
      "description": "Search every past AI conversation in the data factory for a phrase.",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string"}, "limit": {"type": "integer", "default": 20}}}},
+    {"name": "factory_show",
+     "description": "Open the data factory page in the user's browser: totals per agent and the latest sessions.",
+     "inputSchema": {"type": "object", "properties": {}}},
 ]
+OPENED = False  # the page pops up on the first tool call of each server session
 
 
 def handle(method, p):
@@ -268,18 +350,26 @@ def handle(method, p):
     if method == "tools/list":
         return {"tools": TOOLS}
     if method == "tools/call":
+        global OPENED
         a = p.get("arguments") or {}
         if p.get("name") == "factory_log":
             text = log(str(a["source"]), str(a["prompt"]), str(a["response"]), a.get("model"))
         elif p.get("name") == "factory_search":
             text = "\n".join(search(str(a["query"]), int(a.get("limit") or 20))) or "no matches"
+        elif p.get("name") == "factory_show":
+            text = "opened in the browser"
         else:
             raise NotImplementedError(f"unknown tool {p.get('name')}")
+        # every call refreshes the page (an open tab reloads itself); pop it up once per session
+        text += "\n" + show(open_browser=p.get("name") == "factory_show" or not OPENED)
+        OPENED = True
         return {"content": [{"type": "text", "text": text}]}
     raise NotImplementedError(f"unknown method {method}")
 
 
 def mcp():
+    out = os.fdopen(os.dup(1), "w")  # replies go here; anything else printed (browser launchers) goes to stderr
+    os.dup2(2, 1)
     for line in sys.stdin:
         try:
             req = json.loads(line)
@@ -294,7 +384,7 @@ def mcp():
             reply["error"] = {"code": -32601, "message": str(e)}
         except Exception as e:  # bad arguments, disk errors: report, keep serving
             reply["error"] = {"code": -32602, "message": f"{type(e).__name__}: {e}"}
-        print(json.dumps(reply), flush=True)
+        print(json.dumps(reply), file=out, flush=True)
 
 
 def main():
@@ -306,6 +396,7 @@ def main():
     s = sub.add_parser("search")
     s.add_argument("query")
     s.add_argument("-n", "--limit", type=int, default=20)
+    sub.add_parser("show")
     sub.add_parser("mcp")
     a = ap.parse_args()
     if a.cmd == "collect":
@@ -316,6 +407,8 @@ def main():
         export()
     elif a.cmd == "search":
         print("\n".join(search(a.query, a.limit)) or "no matches")
+    elif a.cmd == "show":
+        print(show())
     elif a.cmd == "mcp":
         mcp()
 

@@ -4,3 +4,4 @@ __pycache__/
 train.jsonl
 sessions/
 .data-factory/
+.preview/

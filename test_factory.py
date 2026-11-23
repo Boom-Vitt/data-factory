@@ -4,6 +4,7 @@ from pathlib import Path
 
 tmp = Path(tempfile.mkdtemp())
 os.environ["DATA_FACTORY_HOME"] = str(tmp / "store")
+os.environ["DATA_FACTORY_NO_OPEN"] = "1"  # never pop a browser from the test
 import factory as f
 
 KEY = "sk-" + "a" * 30
@@ -83,20 +84,27 @@ reqs = [
     {"jsonrpc": "2.0", "method": "notifications/initialized"},
     {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
     {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "factory_log", "arguments": {
-        "source": "../../Grok", "prompt": "needle question", "response": f"answer {KEY}"}}},
+        "source": "../../Grok", "prompt": "needle question <script>alert(1)</script>", "response": f"answer {KEY}"}}},
     {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "factory_search", "arguments": {"query": "NEEDLE"}}},
     {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "factory_log", "arguments": {}}},
     {"jsonrpc": "2.0", "id": 6, "method": "nope"},
+    {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "factory_show"}},
 ]
 out = subprocess.run([sys.executable, str(Path(f.__file__).resolve()), "mcp"], capture_output=True, text=True,
                      input="".join(json.dumps(r) + "\n" for r in reqs) + "garbage\n", check=True).stdout
 r = {m["id"]: m for m in map(json.loads, out.splitlines())}
-assert len(r) == 6 and r[1]["result"]["serverInfo"]["name"] == "data-factory"
-assert {t["name"] for t in r[2]["result"]["tools"]} == {"factory_log", "factory_search"}
+assert len(r) == 7 and r[1]["result"]["serverInfo"]["name"] == "data-factory"
+assert {t["name"] for t in r[2]["result"]["tools"]} == {"factory_log", "factory_search", "factory_show"}
 assert "needle question" in r[4]["result"]["content"][0]["text"]
 assert r[5]["error"]["code"] == -32602 and r[6]["error"]["code"] == -32601
 logged = list((f.SESSIONS / "grok").glob("mcp-*.jsonl"))
 assert len(logged) == 1 and KEY not in logged[0].read_text(), "source must stay inside the store, secrets redacted"
 assert not [p for p in tmp.rglob("*.jsonl") if f.STORE not in p.parents and home not in p.parents]
+
+# the factory page: rebuilt by collect and by every tool call, prompt text escaped
+page = (f.STORE / "index.html").read_text()
+assert "index.html" in r[7]["result"]["content"][0]["text"]
+assert "claude-code" in page and "grok" in page and "__" not in page
+assert "&lt;script&gt;alert(1)" in page and "<script>" not in page
 
 print("ok")

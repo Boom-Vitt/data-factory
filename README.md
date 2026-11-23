@@ -10,6 +10,7 @@ You talk to Claude Code, Codex, Gemini, Antigravity, ChatGPT, Grok and a dozen o
 - **Nothing leaves your machine.** No account, no server, no telemetry.
 - **No hooks to install.** It reads the transcripts your agents already write.
 - **One MCP server** for the agents that keep no local transcript.
+- **One page** that shows your whole factory, popped up in your browser whenever an agent uses it.
 
 ## Quick start
 
@@ -36,7 +37,7 @@ Run it again any time. Only sessions that changed are rewritten, so it is safe t
 
 ### Set up your agent
 
-Give any MCP-capable agent two tools, `factory_log` and `factory_search`:
+Give any MCP-capable agent three tools, `factory_log`, `factory_search` and `factory_show`:
 
 ```bash
 claude mcp add data-factory -- python3 /path/to/data-factory/factory.py mcp
@@ -48,12 +49,19 @@ For other clients, add this to their MCP config:
 { "mcpServers": { "data-factory": { "command": "python3", "args": ["/path/to/data-factory/factory.py", "mcp"] } } }
 ```
 
+The first tool call in each agent session opens the factory page (`~/.data-factory/index.html`) in your browser: totals per agent and your latest sessions. Every later call refreshes it, and the open tab reloads itself. It is a local file; nothing is served or uploaded.
+
 ### Ask your agent
 
+- "Show me the factory."
 - "Search the factory for how we fixed the Supabase auth bug last month."
 - "Save this question and your answer to the factory."
 
 ### Use the terminal
+
+```bash
+python3 factory.py show
+```
 
 ```bash
 python3 factory.py search "docker compose"
